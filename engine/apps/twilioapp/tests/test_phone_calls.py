@@ -104,7 +104,7 @@ def test_update_status(mock_has_permission, make_twilio_phone_call):
             content_type="application/x-www-form-urlencoded",
         )
 
-        assert response.status_code == 204
+        assert response.status_code == 200
         assert response.data == ""
 
         twilio_phone_call.refresh_from_db()

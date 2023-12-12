@@ -70,7 +70,7 @@ class SMSStatusCallback(APIView):
         message_status = request.POST.get("MessageStatus")
 
         update_twilio_sms_status(message_sid=message_sid, message_status=message_status)
-        return Response(data="", status=status.HTTP_204_NO_CONTENT)
+        return Response(data="", status=status.HTTP_200_OK)
 
 
 # Receive Call Status Update from Twilio
@@ -82,4 +82,4 @@ class CallStatusCallback(APIView):
         call_status = request.POST.get("CallStatus")
 
         update_twilio_call_status(call_sid=call_sid, call_status=call_status)
-        return Response(data="", status=status.HTTP_204_NO_CONTENT)
+        return Response(data="", status=status.HTTP_200_OK)

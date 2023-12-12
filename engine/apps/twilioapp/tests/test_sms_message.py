@@ -97,7 +97,7 @@ def test_update_status(mock_has_permission, mock_slack_api_call, make_twilio_sms
             data=urlencode(MultiValueDict(data), doseq=True),
             content_type="application/x-www-form-urlencoded",
         )
-        assert response.status_code == 204
+        assert response.status_code == 200
         assert response.data == ""
         twilio_sms.refresh_from_db()
         assert twilio_sms.status == TwilioSMSstatuses.DETERMINANT[status]
