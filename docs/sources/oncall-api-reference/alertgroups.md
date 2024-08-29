@@ -1,10 +1,18 @@
 ---
 canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/alertgroups/
 title: Alert groups HTTP API
-weight: 400
+weight: 0
+refs:
+  pagination:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/oncall-api-reference/#pagination
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/#pagination
 ---
 
-# List alert groups
+# Alert groups HTTP API
+
+## List alert groups
 
 ```shell
 curl "{{API_URL}}/api/v1/alert_groups/" \
@@ -30,11 +38,14 @@ The above command returns JSON structured in the following way:
       "created_at": "2020-05-19T12:37:01.430444Z",
       "resolved_at": "2020-05-19T13:37:01.429805Z",
       "acknowledged_at": null,
+      "acknowledged_by": null,
+      "resolved_by": "UCGEIXI1MR1NZ",
       "title": "Memory above 90% threshold",
       "permalinks": {
         "slack": "https://ghostbusters.slack.com/archives/C1H9RESGA/p135854651500008",
         "telegram": "https://t.me/c/5354/1234?thread=1234"
-      }
+      },
+      "silenced_at": "2020-05-19T13:37:01.429805Z",
     }
   ],
   "current_page_number": 1,
@@ -43,18 +54,35 @@ The above command returns JSON structured in the following way:
 }
 ```
 
+> **Note**: The response is [paginated](ref:pagination). You may need to make multiple requests to get all records.
+
 These available filter parameters should be provided as `GET` arguments:
 
-- `id`
-- `route_id`
-- `integration_id`
-- `state`
+- `id` (Exact match, alert group ID)
+- `route_id` (Exact match, route ID)
+- `integration_id` (Exact match, integration ID)
+- `label` (Matching labels, can be passed multiple times; expected format: `key1:value1`)
+- `team_id` (Exact match, team ID)
+- `started_at` (A "{start}_{end}" ISO 8601 timestamp range; expected format: `%Y-%m-%dT%H:%M:%S_%Y-%m-%dT%H:%M:%S`)
+- `state` (Possible values: `new`, `acknowledged`, `resolved` or `silenced`)
 
 **HTTP request**
 
 `GET {{API_URL}}/api/v1/alert_groups/`
 
-# Acknowledge an alert group
+## Alert group details
+
+```shell
+curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1" \
+  --request GET \
+  --header "Authorization: meowmeowmeow"
+```
+
+**HTTP request**
+
+`GET {{API_URL}}/api/v1/alert_groups/<ALERT_GROUP_ID>`
+
+## Acknowledge an alert group
 
 ```shell
 curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/acknowledge" \
@@ -66,7 +94,7 @@ curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/acknowledge" \
 
 `POST {{API_URL}}/api/v1/alert_groups/<ALERT_GROUP_ID>/acknowledge`
 
-# Unacknowledge an alert group
+## Unacknowledge an alert group
 
 ```shell
 curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/unacknowledge" \
@@ -78,7 +106,7 @@ curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/unacknowledge" \
 
 `POST {{API_URL}}/api/v1/alert_groups/<ALERT_GROUP_ID>/unacknowledge`
 
-# Resolve an alert group
+## Resolve an alert group
 
 ```shell
 curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/resolve" \
@@ -90,7 +118,7 @@ curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/resolve" \
 
 `POST {{API_URL}}/api/v1/alert_groups/<ALERT_GROUP_ID>/resolve`
 
-# Unresolve an alert group
+## Unresolve an alert group
 
 ```shell
 curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/unresolve" \
@@ -102,7 +130,7 @@ curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/unresolve" \
 
 `POST {{API_URL}}/api/v1/alert_groups/<ALERT_GROUP_ID>/unresolve`
 
-# Delete an alert group
+## Delete an alert group
 
 ```shell
 curl "{{API_URL}}/api/v1/alert_groups/I68T24C13IFW1/" \

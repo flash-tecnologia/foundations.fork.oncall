@@ -1,9 +1,5 @@
-import { Faro, initializeFaro, getWebInstrumentations } from '@grafana/faro-web-sdk';
-import { TracingInstrumentation } from '@grafana/faro-web-tracing';
-import { DocumentLoadInstrumentation } from '@opentelemetry/instrumentation-document-load';
-import { FetchInstrumentation } from '@opentelemetry/instrumentation-fetch';
-import { UserInteractionInstrumentation } from '@opentelemetry/instrumentation-user-interaction';
-import { XMLHttpRequestInstrumentation } from '@opentelemetry/instrumentation-xml-http-request';
+import { Faro, initializeFaro, LogLevel, getWebInstrumentations, BrowserConfig } from '@grafana/faro-web-sdk';
+import { AxiosResponse } from 'axios';
 
 import plugin from '../../package.json'; // eslint-disable-line
 import {
@@ -13,9 +9,10 @@ import {
   ONCALL_DEV,
   ONCALL_OPS,
   ONCALL_PROD,
+  getIsDevelopmentEnv,
+  getPluginId,
 } from './consts';
-
-const IGNORE_URLS = [/^((?!\/{0,1}a\/grafana\-oncall\-app\\).)*$/];
+import { safeJSONStringify } from './string';
 
 export function getAppNameUrlPair(onCallApiUrl: string): { appName: string; url: string } {
   const baseName = 'grafana-oncall';
@@ -32,37 +29,38 @@ export function getAppNameUrlPair(onCallApiUrl: string): { appName: string; url:
   }
 }
 
-class FaroHelper {
+class BaseFaroHelper {
   faro: Faro;
 
   initializeFaro(onCallApiUrl: string) {
-    if (this.faro) {
+    if (this.faro || getIsDevelopmentEnv()) {
       return undefined;
     }
 
     try {
       const { appName, url } = getAppNameUrlPair(onCallApiUrl);
 
-      const faroOptions = {
+      const faroOptions: BrowserConfig = {
         url: url,
         isolate: true,
         instrumentations: [
           ...getWebInstrumentations({
-            captureConsole: true,
-          }),
-          new TracingInstrumentation({
-            instrumentations: [
-              new DocumentLoadInstrumentation(),
-              new FetchInstrumentation({ ignoreUrls: IGNORE_URLS }),
-              new XMLHttpRequestInstrumentation({}),
-              new UserInteractionInstrumentation(),
-            ],
+            captureConsoleDisabledLevels: [LogLevel.TRACE, LogLevel.ERROR],
           }),
         ],
-        session: (window as any).__PRELOADED_STATE__?.faro?.session,
         app: {
           name: appName,
           version: plugin?.version,
+        },
+        sessionTracking: {
+          persistent: true,
+        },
+        beforeSend: (event) => {
+          if ((event.meta.page?.url ?? '').includes(getPluginId())) {
+            return event;
+          }
+
+          return null;
         },
       };
 
@@ -73,6 +71,59 @@ class FaroHelper {
 
     return this.faro;
   }
+
+  pushReactError = (error: Error) => {
+    this.faro?.api.pushError(error, { context: { type: 'react' } });
+  };
+
+  pushNetworkRequestEvent = (config: { method: string; url: string; body: string }) => {
+    this.faro?.api.pushEvent('Request sent', config);
+  };
+
+  pushFetchNetworkResponseEvent = ({ name, res, method }: { name: string; res: Response; method: string }) => {
+    this.faro?.api.pushEvent(name, {
+      method,
+      url: res.url,
+      status: `${res.status}`,
+      statusText: `${res.statusText}`,
+    });
+  };
+
+  pushFetchNetworkError = ({ res, responseData, method }: { res: Response; responseData: unknown; method: string }) => {
+    this.faro?.api.pushError(new Error(`Network error: ${res.status}`), {
+      context: {
+        method,
+        type: 'network',
+        url: res.url,
+        data: `${safeJSONStringify(responseData)}`,
+        status: `${res.status}`,
+        statusText: `${res.statusText}`,
+        timestamp: new Date().toUTCString(),
+      },
+    });
+  };
+
+  pushAxiosNetworkResponseEvent = ({ name, res }: { name: string; res?: AxiosResponse }) => {
+    this.faro?.api.pushEvent(name, {
+      url: res?.config?.url,
+      status: `${res?.status}`,
+      statusText: `${res?.statusText}`,
+      method: res?.config?.method.toUpperCase(),
+    });
+  };
+
+  pushAxiosNetworkError = (res?: AxiosResponse) => {
+    this.faro?.api.pushError(new Error(`Network error: ${res?.status}`), {
+      context: {
+        url: res?.config?.url,
+        type: 'network',
+        data: `${safeJSONStringify(res?.data)}`,
+        status: `${res?.status}`,
+        statusText: `${res?.statusText}`,
+        timestamp: new Date().toUTCString(),
+      },
+    });
+  };
 }
 
-export default new FaroHelper();
+export const FaroHelper = new BaseFaroHelper();

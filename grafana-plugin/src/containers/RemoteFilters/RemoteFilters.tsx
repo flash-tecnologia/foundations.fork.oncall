@@ -1,52 +1,71 @@
 import React, { Component } from 'react';
 
-import { KeyValue, SelectableValue, TimeRange } from '@grafana/data';
+import { css } from '@emotion/css';
+import { GrafanaTheme2, KeyValue, SelectableValue, TimeRange } from '@grafana/data';
 import {
   InlineSwitch,
   MultiSelect,
-  TimeRangeInput,
   Select,
   LoadingPlaceholder,
   Input,
   Icon,
   Tooltip,
   Button,
+  withTheme2,
 } from '@grafana/ui';
 import { capitalCase } from 'change-case';
-import cn from 'classnames/bind';
-import { debounce, isEmpty, isUndefined, omitBy, pickBy } from 'lodash-es';
+import { debounce, isUndefined, omitBy, pickBy } from 'lodash-es';
 import { observer } from 'mobx-react';
 import moment from 'moment-timezone';
+import ReactDOM from 'react-dom';
 import Emoji from 'react-emoji-render';
 
-import Text from 'components/Text/Text';
-import LabelsFilter from 'containers/Labels/LabelsFilter';
-import RemoteSelect from 'containers/RemoteSelect/RemoteSelect';
-import TeamName from 'containers/TeamName/TeamName';
-import { FiltersValues } from 'models/filters/filters.types';
+import { RenderConditionally } from 'components/RenderConditionally/RenderConditionally';
+import { Text } from 'components/Text/Text';
+import { LabelsFilter } from 'containers/Labels/LabelsFilter';
+import { RemoteSelect } from 'containers/RemoteSelect/RemoteSelect';
+import { TeamName } from 'containers/TeamName/TeamName';
+import { FilterExtraInformation, FilterExtraInformationValues } from 'models/filters/filters.types';
 import { GrafanaTeamStore } from 'models/grafana_team/grafana_team';
 import { SelectOption, WithStoreProps } from 'state/types';
 import { withMobXProviderContext } from 'state/withStore';
-import LocationHelper from 'utils/LocationHelper';
+import { LocationHelper } from 'utils/LocationHelper';
 import { PAGE } from 'utils/consts';
+import { convertTimerangeToFilterValue, getValueForDateRangeFilterType } from 'utils/datetime';
 
 import { parseFilters } from './RemoteFilters.helpers';
 import { FilterOption } from './RemoteFilters.types';
-
-import styles from './RemoteFilters.module.css';
-
-const cx = cn.bind(styles);
+import { TimeRangePickerWrapper } from './TimeRangePickerWrapper';
 
 interface RemoteFiltersProps extends WithStoreProps {
   onChange: (filters: Record<string, any>, isOnMount: boolean, invalidateFn: () => boolean) => void;
   query: KeyValue;
   page: PAGE;
-  defaultFilters?: FiltersValues;
-  extraFilters?: (state, setState, onFiltersValueChange) => React.ReactNode;
   grafanaTeamStore: GrafanaTeamStore;
+  extraInformation?: FilterExtraInformation;
+  theme: GrafanaTheme2;
+  extraFilters?: (state, setState, onFiltersValueChange) => React.ReactNode;
   skipFilterOptionFn?: (filterOption: FilterOption) => boolean;
 }
-interface RemoteFiltersState {
+
+export function filterExtraInformation(object: FilterExtraInformationValues): FilterExtraInformationValues {
+  const defaultValues: Partial<FilterExtraInformationValues> = {
+    isClearable: true,
+    showInputLabel: true,
+  };
+
+  const result = { ...object };
+
+  Object.keys(defaultValues).forEach((key) => {
+    if (!result.hasOwnProperty(key)) {
+      result[key] = defaultValues[key];
+    }
+  });
+
+  return result;
+}
+
+export interface RemoteFiltersState {
   filterOptions?: FilterOption[];
   filters: FilterOption[];
   values: Record<string, any>;
@@ -55,7 +74,7 @@ interface RemoteFiltersState {
 }
 
 @observer
-class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
+class _RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
   state: RemoteFiltersState = {
     filterOptions: undefined,
     filters: undefined,
@@ -86,12 +105,12 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
       query,
       page,
       store: { filtersStore },
-      defaultFilters,
       skipFilterOptionFn,
     } = this.props;
 
     let filterOptions = await filtersStore.updateOptionsForPage(page);
     const currentTablePageNum = parseInt(filtersStore.currentTablePageNum[page] || query.p || 1, 10);
+    const defaultFilters = this.extractDefaultValuesFromExtraInformation();
 
     if (skipFilterOptionFn) {
       filterOptions = filterOptions.filter((option: FilterOption) => !skipFilterOptionFn(option));
@@ -100,31 +119,31 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
     // set the current page from filters/query or default it to 1
     filtersStore.setCurrentTablePageNum(page, currentTablePageNum);
 
-    let { filters, values } = parseFilters({ ...query, ...filtersStore.globalValues }, filterOptions, query);
-
-    if (isEmpty(values)) {
-      ({ filters, values } = parseFilters(defaultFilters, filterOptions, query));
-    }
+    let { filters, values } = parseFilters(
+      { ...defaultFilters, ...query, ...filtersStore.globalValues },
+      filterOptions,
+      query
+    );
 
     this.setState({ filterOptions, filters, values }, () => this.onChange(true));
   }
 
   render() {
-    const { extraFilters } = this.props;
+    const { extraFilters, theme } = this.props;
+    const styles = getStyles(theme);
 
     return (
-      <div className={cx('root')}>
+      <div className={styles.root}>
         {this.renderFilters()}
         {extraFilters && (
-          <div className={cx('extra-filters')}>
-            {extraFilters(this.state, this.setState.bind(this), this.onFiltersValueChange.bind(this))}
-          </div>
+          <div>{extraFilters(this.state, this.setState.bind(this), this.onFiltersValueChange.bind(this))}</div>
         )}
       </div>
     );
   }
 
   renderFilters = () => {
+    const { theme } = this.props;
     const { filters, filterOptions } = this.state;
 
     if (!filterOptions) {
@@ -143,52 +162,99 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
       }));
 
     const allowFreeSearch = filterOptions.some((filter: FilterOption) => filter.name === 'search');
+    const styles = getStyles(theme);
 
     return (
-      <div className={cx('filters')}>
-        {filters.map((filterOption: FilterOption) => (
-          <div key={filterOption.name} className={cx('filter')}>
-            <Text type="secondary">{filterOption.display_name || capitalCase(filterOption.name)}</Text>
-            {filterOption.description && (
-              <Tooltip content={filterOption.description}>
-                <Icon name="info-circle" />
-              </Tooltip>
-            )}
-            <Text type="secondary">:</Text> {this.renderFilterOption(filterOption)}
-            <Button
-              size="sm"
-              icon="times"
-              tooltip="Remove filter"
-              variant="secondary"
-              onClick={this.getDeleteFilterClickHandler(filterOption.name)}
-            />
-          </div>
-        ))}
-        <Select
-          menuShouldPortal
-          key={filters.length}
-          className={cx('filter-options')}
-          placeholder="Search or filter results..."
-          value={undefined}
-          onChange={this.handleAddFilter}
-          getOptionLabel={(item: SelectableValue) => capitalCase(item.label)}
-          options={options}
-          allowCustomValue={allowFreeSearch}
-          onCreateOption={this.handleSearch}
-          formatCreateLabel={(str) => `Search ${str}`}
-        />
+      <div className={styles.filters}>
+        {filters.map(this.renderFilterBlock)}
+
+        <div className={styles.filterOptions}>
+          <Select
+            menuShouldPortal
+            key={filters.length}
+            placeholder={allowFreeSearch ? 'Search or filter results...' : 'Filter results...'}
+            value={undefined}
+            onChange={this.handleAddFilter}
+            getOptionLabel={(item: SelectableValue) => capitalCase(item.label)}
+            options={options}
+            allowCustomValue={allowFreeSearch}
+            onCreateOption={this.handleSearch}
+            formatCreateLabel={(str) => `Search ${str}`}
+          />
+        </div>
       </div>
     );
   };
 
+  renderFilterBlock = (filterOption: FilterOption) => {
+    const { theme, extraInformation } = this.props;
+    const showInputLabel = this.getExtraInformationField(filterOption, 'showInputLabel');
+    const isInputClearable = this.getExtraInformationField(filterOption, 'isClearable');
+
+    const styles = getStyles(theme);
+
+    const filterElement = (
+      <div key={filterOption.name} className={styles.filter}>
+        <RenderConditionally shouldRender={showInputLabel}>
+          <Text withBackground wrap={false} type="primary">
+            {filterOption.display_name || capitalCase(filterOption.name)}
+            {filterOption.description && (
+              <span className={styles.infoIcon}>
+                <Tooltip content={filterOption.description}>
+                  <Icon name="info-circle" />
+                </Tooltip>
+              </span>
+            )}
+          </Text>
+        </RenderConditionally>
+
+        {this.renderFilterOption(filterOption)}
+
+        <RenderConditionally shouldRender={isInputClearable}>
+          <Button
+            size="md"
+            icon="times"
+            tooltip="Remove filter"
+            variant="secondary"
+            onClick={this.getDeleteFilterClickHandler(filterOption.name)}
+          />
+        </RenderConditionally>
+      </div>
+    );
+
+    if (extraInformation?.[filterOption.name]?.portal?.current) {
+      return ReactDOM.createPortal(filterElement, extraInformation[filterOption.name].portal.current);
+    }
+
+    return filterElement;
+  };
+
+  getExtraInformationField = (filterOption: FilterOption, key: keyof FilterExtraInformationValues) => {
+    return filterExtraInformation(this.props.extraInformation?.[filterOption.name])?.[key];
+  };
+
+  extractDefaultValuesFromExtraInformation = (): { [key: string]: FilterExtraInformationValues } => {
+    const { extraInformation } = this.props;
+
+    return extraInformation
+      ? Object.keys(extraInformation).reduce((acc, key) => {
+          if (extraInformation[key].value) {
+            acc[key] = extraInformation[key].value;
+          }
+
+          return acc;
+        }, {})
+      : {};
+  };
+
   handleSearch = (query: string) => {
-    const { filters } = this.state;
+    const { filters, filterOptions } = this.state;
 
     const searchFilter = filters.find((filter: FilterOption) => filter.name === 'search');
 
     const newFilters = filters;
     if (!searchFilter) {
-      newFilters.push({ name: 'search', type: 'search' });
+      newFilters.push(filterOptions.find((filter: FilterOption) => filter.name === 'search'));
     } else {
       this.searchRef.current.focus();
     }
@@ -241,7 +307,8 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
 
   renderFilterOption = (filter: FilterOption) => {
     const { values, hadInteraction } = this.state;
-    const { grafanaTeamStore } = this.props;
+    const { grafanaTeamStore, theme } = this.props;
+    const styles = getStyles(theme);
 
     const autoFocus = Boolean(hadInteraction);
     switch (filter.type) {
@@ -251,7 +318,7 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
             <MultiSelect
               autoFocus={autoFocus}
               openMenuOnFocus
-              className={cx('filter-select')}
+              className={styles.filterSelect}
               options={filter.options.map((option: SelectOption) => ({
                 label: option.display_name,
                 value: option.value,
@@ -265,7 +332,7 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
         return (
           <RemoteSelect
             autoFocus={autoFocus}
-            className={cx('filter-select')}
+            className={styles.filterSelect}
             isMulti
             fieldToShow="display_name"
             valueField="value"
@@ -284,6 +351,7 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
             transparent
             value={values[filter.name]}
             onChange={this.getBooleanFilterChangeHandler(filter.name)}
+            className={styles.border}
           />
         );
 
@@ -301,7 +369,7 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
         return (
           <RemoteSelect
             autoFocus={autoFocus}
-            className={cx('filter-select')}
+            className={styles.filterSelect}
             isMulti
             fieldToShow="name"
             valueField="id"
@@ -313,26 +381,13 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
         );
 
       case 'daterange':
-        const dates = values[filter.name] ? values[filter.name].split('/') : undefined;
-
-        const value = {
-          from: dates ? moment(dates[0] + 'Z') : undefined,
-          to: dates ? moment(dates[1] + 'Z') : undefined,
-          raw: {
-            from: dates ? dates[0] : '',
-            to: dates ? dates[1] : '',
-          },
-        };
+        const value = getValueForDateRangeFilterType(values[filter.name]);
 
         return (
-          <TimeRangeInput
+          <TimeRangePickerWrapper
             timeZone={moment.tz.guess()}
-            autoFocus={autoFocus}
-            // @ts-ignore
             value={value}
             onChange={this.getDateRangeFilterChangeHandler(filter.name)}
-            hideTimeZone
-            clearable={false}
           />
         );
 
@@ -342,7 +397,7 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
           <LabelsFilter
             filterType={filter.type}
             autoFocus={autoFocus}
-            className={cx('filter-select')}
+            className={styles.filterSelect}
             value={values[filter.name]}
             onChange={this.getLabelsFilterChangeHandler(filter.name)}
           />
@@ -386,9 +441,7 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
 
   getDateRangeFilterChangeHandler = (name: FilterOption['name']) => {
     return (timeRange: TimeRange) => {
-      const value =
-        timeRange.from.utc().format('YYYY-MM-DDTHH:mm:ss') + '/' + timeRange.to.utc().format('YYYY-MM-DDTHH:mm:ss');
-
+      const value = convertTimerangeToFilterValue(timeRange);
       this.onFiltersValueChange(name, value);
     };
   };
@@ -455,6 +508,51 @@ class RemoteFilters extends Component<RemoteFiltersProps, RemoteFiltersState> {
   debouncedOnChange = debounce(this.onChange, 500);
 }
 
-export default withMobXProviderContext(RemoteFilters) as unknown as React.ComponentClass<
-  Omit<RemoteFiltersProps, 'store'>
+export const RemoteFilters = withMobXProviderContext(withTheme2(_RemoteFilters)) as unknown as React.ComponentClass<
+  Omit<RemoteFiltersProps, 'store' | 'theme'>
 >;
+
+const getStyles = (theme: GrafanaTheme2) => {
+  return {
+    root: css`
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+    `,
+
+    filters: css`
+      display: flex;
+      gap: 10px;
+      border: 1px solid ${theme.colors.border.weak}
+      border-radius: 2px;
+      flex-wrap: wrap;
+    `,
+
+    filter: css`
+      display: flex;
+      align-items: center;
+      gap: 0;
+    `,
+
+    filterOptions: css`
+      width: 250px;
+    `,
+
+    filterSelect: css`
+      min-width: 250px;
+      width: fit-content;
+    `,
+
+    infoIcon: css`
+      margin-left: 4px;
+    `,
+
+    border: css`
+      border: 1px solid ${theme.colors.border.medium};
+
+      &:hover {
+        border: 1px solid ${theme.colors.border.strong};
+      }
+    `,
+  };
+};

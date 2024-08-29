@@ -1,33 +1,31 @@
-import React, { FC, useCallback, useState } from 'react';
+import React, { FC, useCallback } from 'react';
 
-import { Button, Drawer, HorizontalGroup, VerticalGroup } from '@grafana/ui';
+import { css } from '@emotion/css';
+import { Button, Drawer, Field, TextArea, useStyles2, Stack } from '@grafana/ui';
 import { observer } from 'mobx-react';
+import { Controller, FormProvider, useForm } from 'react-hook-form';
+import { getUtilStyles } from 'styles/utils.styles';
 
-import GForm from 'components/GForm/GForm';
-import AddResponders from 'containers/AddResponders/AddResponders';
+import { AddResponders } from 'containers/AddResponders/AddResponders';
 import { prepareForUpdate } from 'containers/AddResponders/AddResponders.helpers';
 import { AlertReceiveChannelStore } from 'models/alert_receive_channel/alert_receive_channel';
-import { Alert as AlertType } from 'models/alertgroup/alertgroup.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { useStore } from 'state/useStore';
-import { openWarningNotification } from 'utils';
+import { openWarningNotification } from 'utils/utils';
 
-import { manualAlertFormConfig, ManualAlertGroupFormData } from './ManualAlertGroup.config';
+export type FormData = {
+  message: string;
+};
 
 interface ManualAlertGroupProps {
   onHide: () => void;
-  onCreate: (id: AlertType['pk']) => void;
+  onCreate: (id: ApiSchemas['AlertGroup']['pk']) => void;
   alertReceiveChannelStore: AlertReceiveChannelStore;
 }
 
-const data: ManualAlertGroupFormData = {
-  message: '',
-};
-
-const ManualAlertGroup: FC<ManualAlertGroupProps> = observer(({ onCreate, onHide }) => {
+export const ManualAlertGroup: FC<ManualAlertGroupProps> = observer(({ onCreate, onHide }) => {
   const { directPagingStore } = useStore();
   const { selectedTeamResponder, selectedUserResponders } = directPagingStore;
-
-  const [formIsValid, setFormIsValid] = useState<boolean>(false);
 
   const onHideDrawer = useCallback(() => {
     directPagingStore.resetSelectedUsers();
@@ -35,50 +33,80 @@ const ManualAlertGroup: FC<ManualAlertGroupProps> = observer(({ onCreate, onHide
     onHide();
   }, [onHide]);
 
-  const hasSelectedEitherATeamOrAUser = selectedTeamResponder !== null || selectedUserResponders.length > 0;
-  const formIsSubmittable = hasSelectedEitherATeamOrAUser && formIsValid;
+  const formMethods = useForm<FormData>({
+    mode: 'onChange',
+    defaultValues: { message: '' },
+  });
+
+  const {
+    handleSubmit,
+    control,
+    formState: { errors },
+  } = formMethods;
+
+  const formIsSubmittable = selectedTeamResponder !== null || selectedUserResponders.length > 0;
 
   // TODO: add a loading state while we're waiting to hear back from the API when submitting
   // const [directPagingLoading, setdirectPagingLoading] = useState<boolean>();
 
-  const handleFormSubmit = useCallback(
-    async (data: ManualAlertGroupFormData) => {
-      const transformedData = prepareForUpdate(selectedUserResponders, selectedTeamResponder, data);
+  const onSubmit = async (data: FormData) => {
+    const transformedData = prepareForUpdate(selectedUserResponders, selectedTeamResponder, data);
+    const resp = await directPagingStore.createManualAlertRule(transformedData);
 
-      const resp = await directPagingStore.createManualAlertRule(transformedData);
+    if (!resp) {
+      openWarningNotification('There was an issue creating the alert group, please try again');
+      return;
+    }
 
-      if (!resp) {
-        openWarningNotification('There was an issue creating the alert group, please try again');
-        return;
-      }
+    directPagingStore.resetSelectedUsers();
+    directPagingStore.resetSelectedTeam();
 
-      directPagingStore.resetSelectedUsers();
-      directPagingStore.resetSelectedTeam();
+    onCreate(resp.alert_group_id);
+    onHide();
+  };
 
-      onCreate(resp.alert_group_id);
-      onHide();
-    },
-    [prepareForUpdate, selectedUserResponders, selectedTeamResponder]
-  );
+  const utilStyles = useStyles2(getUtilStyles);
+  const styles = useStyles2(getStyles);
 
   return (
     <Drawer scrollableContent title="New escalation" onClose={onHideDrawer} closeOnMaskClick={false} width="70%">
-      <VerticalGroup>
-        <GForm form={manualAlertFormConfig} data={data} onSubmit={handleFormSubmit} onChange={setFormIsValid} />
-        <AddResponders mode="create" />
-        <div className="buttons">
-          <HorizontalGroup justify="flex-end">
-            <Button variant="secondary" onClick={onHideDrawer}>
-              Cancel
-            </Button>
-            <Button type="submit" form={manualAlertFormConfig.name} disabled={!formIsSubmittable}>
-              Create
-            </Button>
-          </HorizontalGroup>
-        </div>
-      </VerticalGroup>
+      <Stack direction="column">
+        <FormProvider {...formMethods}>
+          <form id="Manual Alert Group" onSubmit={handleSubmit(onSubmit)} className={utilStyles.width100}>
+            <Controller
+              name="message"
+              control={control}
+              rules={{ required: 'Message is required' }}
+              render={({ field }) => (
+                <Field label="What is going on?" invalid={Boolean(errors.message)} error={errors.message?.message}>
+                  <TextArea name="message" rows={4} {...field} />
+                </Field>
+              )}
+            />
+
+            <AddResponders mode="create" />
+
+            <div className={styles.buttons}>
+              <Stack justifyContent="flex-end">
+                <Button variant="secondary" onClick={onHideDrawer}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={!formIsSubmittable}>
+                  Create
+                </Button>
+              </Stack>
+            </div>
+          </form>
+        </FormProvider>
+      </Stack>
     </Drawer>
   );
 });
 
-export default ManualAlertGroup;
+const getStyles = () => {
+  return {
+    buttons: css`
+      padding-top: 12px;
+    `,
+  };
+};

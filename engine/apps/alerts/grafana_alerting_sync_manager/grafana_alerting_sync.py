@@ -203,7 +203,7 @@ class GrafanaAlertingSyncManager:
         if config is None:
             logger.warning(
                 f"GrafanaAlertingSyncManager: Got config None in get_alerting_config_for_datasource "
-                f"for is_grafana_datasource {datasource_uid==cls.GRAFANA_ALERTING_DATASOURCE}, "
+                f"for is_grafana_datasource {datasource_uid == cls.GRAFANA_ALERTING_DATASOURCE}, "
                 f"response: {response_info}"
             )
             return
@@ -232,7 +232,7 @@ class GrafanaAlertingSyncManager:
         if response is None:
             logger.warning(
                 f"GrafanaAlertingSyncManager: Failed to update contact point (POST) for is_grafana_datasource "
-                f"{datasource_uid==cls.GRAFANA_ALERTING_DATASOURCE}; response: {response_info}"
+                f"{datasource_uid == cls.GRAFANA_ALERTING_DATASOURCE}; response: {response_info}"
             )
             if response_info.get("status_code") == status.HTTP_400_BAD_REQUEST:
                 logger.warning(f"GrafanaAlertingSyncManager: Config: {config}, Updated config: {updated_config}")
@@ -370,16 +370,20 @@ class GrafanaAlertingSyncManager:
         return contact_points
 
     def _recursive_check_contact_point_is_in_routes(self, route_config: dict, receiver_name: str) -> bool:
-        if route_config.get("receiver") == receiver_name:
-            return True
-        routes = route_config.get("routes", [])
-        for route in routes:
-            if route.get("receiver") == receiver_name:
-                return True
-            if route.get("routes"):
-                if self._recursive_check_contact_point_is_in_routes(route, receiver_name):
-                    return True
-        return False
+        # TODO: Relaxing this condition due to API limitations when requesting config with external service account
+        # instead of Admin response does not contain child routes.  We are currently considering the integration
+        # connected as long as the contact point exists.
+        return True
+        # if route_config.get("receiver") == receiver_name:
+        #     return True
+        # routes = route_config.get("routes", [])
+        # for route in routes:
+        #     if route.get("receiver") == receiver_name:
+        #         return True
+        #     if route.get("routes"):
+        #         if self._recursive_check_contact_point_is_in_routes(route, receiver_name):
+        #             return True
+        # return False
 
     def _get_oncall_config_and_config_field_for_datasource_type(
         self, contact_point_name: str, is_grafana_datasource: bool, is_oncall_type_available: bool

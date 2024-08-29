@@ -1,25 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { Button, Field, HorizontalGroup, IconButton, Input, TextArea, VerticalGroup } from '@grafana/ui';
+import { Button, Field, IconButton, Input, TextArea, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import dayjs from 'dayjs';
-import Draggable from 'react-draggable';
+import Draggable, { DraggableData, DraggableEvent } from 'react-draggable';
 
-import Modal from 'components/Modal/Modal';
-import Tag from 'components/Tag/Tag';
-import Text from 'components/Text/Text';
-import WithConfirm from 'components/WithConfirm/WithConfirm';
+import { Modal } from 'components/Modal/Modal';
+import { Tag } from 'components/Tag/Tag';
+import { Text } from 'components/Text/Text';
+import { WithConfirm } from 'components/WithConfirm/WithConfirm';
+import { calculateScheduleFormOffset } from 'containers/Rotations/Rotations.helpers';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
 import { SHIFT_SWAP_COLOR } from 'models/schedule/schedule.helpers';
 import { Schedule, ShiftSwap } from 'models/schedule/schedule.types';
-import { getTzOffsetString } from 'models/timezone/timezone.helpers';
-import { Timezone } from 'models/timezone/timezone.types';
 import { getUTCString } from 'pages/schedule/Schedule.helpers';
 import { useStore } from 'state/useStore';
-import { UserActions } from 'utils/authorization';
+import { UserActions } from 'utils/authorization/authorization';
+import { GRAFANA_HEADER_HEIGHT, StackSize } from 'utils/consts';
+import { useDebouncedCallback, useResize } from 'utils/hooks';
 
-import DateTimePicker from './parts/DateTimePicker';
-import UserItem from './parts/UserItem';
+import { getDraggableModalCoordinatesOnInit } from './RotationForm.helpers';
+import { DateTimePicker } from './parts/DateTimePicker';
+import { UserItem } from './parts/UserItem';
 
 import styles from './RotationForm.module.css';
 
@@ -28,30 +30,45 @@ const cx = cn.bind(styles);
 interface ShiftSwapFormProps {
   id: ShiftSwap['id'] | 'new';
   scheduleId: Schedule['id'];
-  startMoment: dayjs.Dayjs;
   params: Partial<ShiftSwap>;
-  currentTimezone: Timezone;
-
   onUpdate: () => void;
-
   onHide: () => void;
 }
 
-const ShiftSwapForm = (props: ShiftSwapFormProps) => {
-  const { onUpdate, onHide, id, scheduleId, startMoment, params: defaultParams, currentTimezone } = props;
+export const ShiftSwapForm = (props: ShiftSwapFormProps) => {
+  const { onUpdate, onHide, id, scheduleId, params: defaultParams } = props;
 
   const [shiftSwap, setShiftSwap] = useState({ ...defaultParams });
+  const [offsetTop, setOffsetTop] = useState(GRAFANA_HEADER_HEIGHT + 10);
+  const [draggablePosition, setDraggablePosition] = useState<{ x: number; y: number }>(undefined);
+  const [bounds, setDraggableBounds] = useState<{ left: number; right: number; top: number; bottom: number }>(
+    undefined
+  );
+
+  const debouncedOnResize = useDebouncedCallback(onResize, 250);
+
+  useResize(debouncedOnResize);
 
   const store = useStore();
   const {
     scheduleStore,
     userStore: { currentUserPk },
+    timezoneStore: { selectedTimezoneOffset },
   } = store;
 
   useEffect(() => {
-    if (id !== 'new') {
-      scheduleStore.loadShiftSwap(id).then(setShiftSwap);
-    }
+    (async () => {
+      setOffsetTop(await calculateScheduleFormOffset(`.${cx('draggable')}`));
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      if (id !== 'new') {
+        const shiftSwap = await scheduleStore.loadShiftSwap(id);
+        setShiftSwap(shiftSwap);
+      }
+    })();
   }, [id]);
 
   const handleHide = useCallback(() => {
@@ -84,13 +101,13 @@ const ShiftSwapForm = (props: ShiftSwapFormProps) => {
 
   useEffect(() => {
     if (id === 'new') {
-      store.scheduleStore.updateShiftsSwapPreview(scheduleId, startMoment, {
+      store.scheduleStore.updateShiftsSwapPreview(scheduleId, store.timezoneStore.calendarStartDate, {
         id: 'new',
         beneficiary: { pk: currentUserPk },
         ...shiftSwap,
       });
     }
-  }, [shiftSwap, startMoment]);
+  }, [shiftSwap, store.timezoneStore.calendarStartDate, selectedTimezoneOffset]);
 
   const handleDescriptionChange = useCallback(
     (event) => {
@@ -132,19 +149,27 @@ const ShiftSwapForm = (props: ShiftSwapFormProps) => {
       width="430px"
       onDismiss={handleHide}
       contentElement={(props, children) => (
-        <Draggable handle=".drag-handler" defaultClassName={cx('draggable')} positionOffset={{ x: 0, y: 200 }}>
+        <Draggable
+          handle=".drag-handler"
+          defaultClassName={cx('draggable')}
+          positionOffset={{ x: 0, y: offsetTop }}
+          position={draggablePosition}
+          bounds={{ ...bounds } || 'body'}
+          onStart={onDraggableInit}
+          onStop={(_e, data) => setDraggablePosition({ x: data.x, y: data.y })}
+        >
           <div {...props}>{children}</div>
         </Draggable>
       )}
     >
       <div className={cx('root')}>
-        <VerticalGroup>
-          <HorizontalGroup justify="space-between">
-            <HorizontalGroup spacing="sm">
+        <Stack direction="column">
+          <Stack justifyContent="space-between">
+            <Stack gap={StackSize.sm}>
               {isNew && <Tag color={SHIFT_SWAP_COLOR}>New</Tag>}
               <Text.Title level={5}>{isNew ? 'Shift swap request' : 'Shift swap'}</Text.Title>
-            </HorizontalGroup>
-            <HorizontalGroup>
+            </Stack>
+            <Stack>
               {!isNew && (
                 <WithPermissionControlTooltip userAction={UserActions.SchedulesWrite}>
                   <WithConfirm title="Are you sure to delete shift swap request?" confirmText="Delete">
@@ -160,8 +185,8 @@ const ShiftSwapForm = (props: ShiftSwapFormProps) => {
               )}
               <IconButton aria-label="Drag" variant="secondary" className={cx('drag-handler')} name="draggabledots" />
               <IconButton name="times" variant="secondary" tooltip="Close" onClick={handleHide} />
-            </HorizontalGroup>
-          </HorizontalGroup>
+            </Stack>
+          </Stack>
 
           <div className={cx('fields')}>
             {!isNew && (
@@ -170,24 +195,24 @@ const ShiftSwapForm = (props: ShiftSwapFormProps) => {
               </Field>
             )}
 
-            <HorizontalGroup height="auto">
+            <Stack height="auto">
               <Field label="Swap start">
                 <DateTimePicker
-                  timezone={store.currentTimezone}
                   disabled={!isNew}
+                  utcOffset={selectedTimezoneOffset}
                   value={dayjs(shiftSwap.swap_start)}
                   onChange={handleShiftSwapStartChange}
                 />
               </Field>
               <Field label="Swap end">
                 <DateTimePicker
-                  timezone={store.currentTimezone}
                   disabled={!isNew}
+                  utcOffset={selectedTimezoneOffset}
                   value={dayjs(shiftSwap.swap_end)}
                   onChange={handleShiftSwapEndChange}
                 />
               </Field>
-            </HorizontalGroup>
+            </Stack>
 
             <Field label="Description">
               <TextArea rows={4} disabled={!isNew} value={shiftSwap.description} onChange={handleDescriptionChange}>
@@ -210,9 +235,9 @@ const ShiftSwapForm = (props: ShiftSwapFormProps) => {
             )}
           </div>
 
-          <HorizontalGroup justify="space-between">
-            <Text type="secondary">Current timezone: {getTzOffsetString(dayjs().tz(currentTimezone))}</Text>
-            <HorizontalGroup>
+          <Stack justifyContent="space-between">
+            <Text type="secondary">Current timezone: {store.timezoneStore.selectedTimezoneLabel}</Text>
+            <Stack>
               <WithPermissionControlTooltip userAction={UserActions.SchedulesWrite}>
                 {isNew ? (
                   <Button variant="primary" onClick={handleCreate}>
@@ -230,12 +255,25 @@ const ShiftSwapForm = (props: ShiftSwapFormProps) => {
                   </Button>
                 )}
               </WithPermissionControlTooltip>
-            </HorizontalGroup>
-          </HorizontalGroup>
-        </VerticalGroup>
+            </Stack>
+          </Stack>
+        </Stack>
       </div>
     </Modal>
   );
-};
 
-export default ShiftSwapForm;
+  async function onResize() {
+    setOffsetTop(await calculateScheduleFormOffset(`.${cx('draggable')}`));
+
+    setDraggablePosition({ x: 0, y: 0 });
+  }
+
+  function onDraggableInit(_e: DraggableEvent, data: DraggableData) {
+    if (!data) {
+      return;
+    }
+
+    const bounds = getDraggableModalCoordinatesOnInit(data, offsetTop);
+    setDraggableBounds(bounds);
+  }
+};

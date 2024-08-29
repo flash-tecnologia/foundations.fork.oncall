@@ -42,7 +42,7 @@ class WebhooksFilter(ByTeamModelFieldFilterMixin, ModelFieldFilterMixin, filters
     team = TeamModelMultipleChoiceFilter()
 
 
-class WebhooksView(TeamFilteringMixin, PublicPrimaryKeyMixin, ModelViewSet):
+class WebhooksView(TeamFilteringMixin, PublicPrimaryKeyMixin[Webhook], ModelViewSet):
     authentication_classes = (PluginAuthentication,)
     permission_classes = (IsAuthenticated, RBACPermission)
 
@@ -92,9 +92,11 @@ class WebhooksView(TeamFilteringMixin, PublicPrimaryKeyMixin, ModelViewSet):
         instance.delete()
 
     def get_queryset(self, ignore_filtering_by_available_teams=False):
-        queryset = Webhook.objects.filter(
-            organization=self.request.auth.organization,
-        )
+        queryset = Webhook.objects.filter(organization=self.request.auth.organization)
+        if self.action == "list":
+            # exclude connected integration webhooks when listing entries
+            queryset = queryset.filter(is_from_connected_integration=False)
+
         if not ignore_filtering_by_available_teams:
             queryset = queryset.filter(*self.available_teams_lookup_args).distinct()
 
@@ -138,10 +140,10 @@ class WebhooksView(TeamFilteringMixin, PublicPrimaryKeyMixin, ModelViewSet):
 
     @action(methods=["get"], detail=False)
     def filters(self, request):
-        filter_name = request.query_params.get("search", None)
         api_root = "/api/internal/v1/"
 
         filter_options = [
+            {"name": "search", "type": "search"},
             {
                 "name": "team",
                 "type": "team_select",
@@ -158,9 +160,6 @@ class WebhooksView(TeamFilteringMixin, PublicPrimaryKeyMixin, ModelViewSet):
                     "type": "labels",
                 }
             )
-
-        if filter_name is not None:
-            filter_options = list(filter(lambda f: filter_name in f["name"], filter_options))
 
         return Response(filter_options)
 

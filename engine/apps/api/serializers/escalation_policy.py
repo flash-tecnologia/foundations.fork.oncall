@@ -1,14 +1,14 @@
-import time
 from datetime import timedelta
 
 from rest_framework import serializers
 
-from apps.alerts.models import CustomButton, EscalationChain, EscalationPolicy
+from apps.alerts.models import EscalationChain, EscalationPolicy
 from apps.schedules.models import OnCallSchedule
 from apps.slack.models import SlackUserGroup
-from apps.user_management.models import User
+from apps.user_management.models import Team, User
 from apps.webhooks.models import Webhook
 from common.api_helpers.custom_fields import (
+    DurationSecondsField,
     OrganizationFilteredPrimaryKeyRelatedField,
     UsersFilteredByOrganizationField,
 )
@@ -18,11 +18,11 @@ WAIT_DELAY = "wait_delay"
 NOTIFY_SCHEDULE = "notify_schedule"
 NOTIFY_TO_USERS_QUEUE = "notify_to_users_queue"
 NOTIFY_GROUP = "notify_to_group"
+NOTIFY_TEAM_MEMBERS = "notify_to_team_members"
 FROM_TIME = "from_time"
 TO_TIME = "to_time"
 NUM_ALERTS_IN_WINDOW = "num_alerts_in_window"
 NUM_MINUTES_IN_WINDOW = "num_minutes_in_window"
-CUSTOM_BUTTON_TRIGGER = "custom_button_trigger"
 CUSTOM_WEBHOOK_TRIGGER = "custom_webhook"
 
 STEP_TYPE_TO_RELATED_FIELD_MAP = {
@@ -31,9 +31,9 @@ STEP_TYPE_TO_RELATED_FIELD_MAP = {
     EscalationPolicy.STEP_NOTIFY_USERS_QUEUE: [NOTIFY_TO_USERS_QUEUE],
     EscalationPolicy.STEP_NOTIFY_MULTIPLE_USERS: [NOTIFY_TO_USERS_QUEUE],
     EscalationPolicy.STEP_NOTIFY_GROUP: [NOTIFY_GROUP],
+    EscalationPolicy.STEP_NOTIFY_TEAM_MEMBERS: [NOTIFY_TEAM_MEMBERS],
     EscalationPolicy.STEP_NOTIFY_IF_TIME: [FROM_TIME, TO_TIME],
     EscalationPolicy.STEP_NOTIFY_IF_NUM_ALERTS_IN_TIME_WINDOW: [NUM_ALERTS_IN_WINDOW, NUM_MINUTES_IN_WINDOW],
-    EscalationPolicy.STEP_TRIGGER_CUSTOM_BUTTON: [CUSTOM_BUTTON_TRIGGER],
     EscalationPolicy.STEP_TRIGGER_CUSTOM_WEBHOOK: [CUSTOM_WEBHOOK_TRIGGER],
 }
 
@@ -47,18 +47,25 @@ class EscalationPolicySerializer(EagerLoadingMixin, serializers.ModelSerializer)
         queryset=User.objects,
         required=False,
     )
-    wait_delay = serializers.ChoiceField(
+    wait_delay = DurationSecondsField(
         required=False,
-        choices=EscalationPolicy.WEB_DURATION_CHOICES,
         allow_null=True,
+        min_value=timedelta(minutes=1),
+        max_value=timedelta(hours=24),
     )
-    num_minutes_in_window = serializers.ChoiceField(
+    num_minutes_in_window = serializers.IntegerField(
         required=False,
-        choices=EscalationPolicy.WEB_DURATION_CHOICES_MINUTES,
         allow_null=True,
+        min_value=1,  # 1 minute
+        max_value=24 * 60,  # 24 hours
     )
     notify_schedule = OrganizationFilteredPrimaryKeyRelatedField(
         queryset=OnCallSchedule.objects,
+        required=False,
+        allow_null=True,
+    )
+    notify_to_team_members = OrganizationFilteredPrimaryKeyRelatedField(
+        queryset=Team.objects,
         required=False,
         allow_null=True,
     )
@@ -67,12 +74,6 @@ class EscalationPolicySerializer(EagerLoadingMixin, serializers.ModelSerializer)
         required=False,
         allow_null=True,
         filter_field="slack_team_identity__organizations",
-    )
-    custom_button_trigger = OrganizationFilteredPrimaryKeyRelatedField(
-        queryset=CustomButton.objects,
-        required=False,
-        allow_null=True,
-        filter_field="organization",
     )
     custom_webhook = OrganizationFilteredPrimaryKeyRelatedField(
         queryset=Webhook.objects,
@@ -94,10 +95,10 @@ class EscalationPolicySerializer(EagerLoadingMixin, serializers.ModelSerializer)
             "num_alerts_in_window",
             "num_minutes_in_window",
             "slack_integration_required",
-            "custom_button_trigger",
             "custom_webhook",
             "notify_schedule",
             "notify_to_group",
+            "notify_to_team_members",
             "important",
         ]
 
@@ -105,7 +106,7 @@ class EscalationPolicySerializer(EagerLoadingMixin, serializers.ModelSerializer)
         "escalation_chain",
         "notify_schedule",
         "notify_to_group",
-        "custom_button_trigger",
+        "notify_to_team_members",
         "custom_webhook",
     ]
     PREFETCH_RELATED = ["notify_to_users_queue"]
@@ -115,12 +116,12 @@ class EscalationPolicySerializer(EagerLoadingMixin, serializers.ModelSerializer)
             WAIT_DELAY,
             NOTIFY_SCHEDULE,
             NOTIFY_TO_USERS_QUEUE,
+            NOTIFY_TEAM_MEMBERS,
             NOTIFY_GROUP,
             FROM_TIME,
             TO_TIME,
             NUM_ALERTS_IN_WINDOW,
             NUM_MINUTES_IN_WINDOW,
-            CUSTOM_BUTTON_TRIGGER,
             CUSTOM_WEBHOOK_TRIGGER,
         ]
 
@@ -152,28 +153,11 @@ class EscalationPolicySerializer(EagerLoadingMixin, serializers.ModelSerializer)
             raise serializers.ValidationError("Invalid escalation step type: step is Slack-specific")
         return step_type
 
-    def to_internal_value(self, data):
-        data = self._wait_delay_to_internal_value(data)
-        return super().to_internal_value(data)
-
     def to_representation(self, instance):
         step = instance.step
         result = super().to_representation(instance)
         result = EscalationPolicySerializer._get_important_field(step, result)
         return result
-
-    @staticmethod
-    def _wait_delay_to_internal_value(data):
-        if data.get(WAIT_DELAY, None):
-            try:
-                time.strptime(data[WAIT_DELAY], "%H:%M:%S")
-            except ValueError:
-                try:
-                    data[WAIT_DELAY] = str(timedelta(seconds=float(data[WAIT_DELAY])))
-                except ValueError:
-                    raise serializers.ValidationError("Invalid wait delay format")
-
-        return data
 
     @staticmethod
     def _get_important_field(step, result):
@@ -224,11 +208,11 @@ class EscalationPolicyUpdateSerializer(EscalationPolicySerializer):
             NOTIFY_SCHEDULE,
             NOTIFY_TO_USERS_QUEUE,
             NOTIFY_GROUP,
+            NOTIFY_TEAM_MEMBERS,
             FROM_TIME,
             TO_TIME,
             NUM_ALERTS_IN_WINDOW,
             NUM_MINUTES_IN_WINDOW,
-            CUSTOM_BUTTON_TRIGGER,
             CUSTOM_WEBHOOK_TRIGGER,
         ]
 

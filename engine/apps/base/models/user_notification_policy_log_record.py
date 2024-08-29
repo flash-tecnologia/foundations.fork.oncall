@@ -1,4 +1,5 @@
 import logging
+import typing
 
 import humanize
 from django.db import models
@@ -15,11 +16,45 @@ from apps.base.models.user_notification_policy import validate_channel_choice
 from apps.slack.slack_formatter import SlackFormatter
 from common.utils import clean_markup
 
+if typing.TYPE_CHECKING:
+    from apps.alerts.models import AlertGroup
+    from apps.user_management.models import User
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
+def _check_if_notification_policy_is_transient_fallback(kwargs):
+    """
+    If `using_fallback_default_notification_policy_step` is present, and `True`, then the `notification_policy`
+    field should be set to `None`. This is because we do not persist default notification policies in the
+    database. It only exists as a transient/in-memory object, and therefore has no foreign key to reference.
+    """
+    using_fallback_default_notification_policy_step = kwargs.pop(
+        "using_fallback_default_notification_policy_step", False
+    )
+
+    if using_fallback_default_notification_policy_step:
+        kwargs.pop("notification_policy", None)
+
+
+class UserNotificationPolicyLogRecordQuerySet(models.QuerySet):
+    def create(self, **kwargs):
+        """
+        Needed for when we do something like this:
+        notification_policy = UserNotificationPolicy.objects.create(arg1="foo", ...)
+        """
+        _check_if_notification_policy_is_transient_fallback(kwargs)
+        return super().create(**kwargs)
+
+
 class UserNotificationPolicyLogRecord(models.Model):
+    alert_group: "AlertGroup"
+    author: typing.Optional["User"]
+    notification_policy: typing.Optional[UserNotificationPolicy]
+
+    objects: models.Manager["UserNotificationPolicyLogRecord"] = UserNotificationPolicyLogRecordQuerySet.as_manager()
+
     (
         TYPE_PERSONAL_NOTIFICATION_TRIGGERED,
         TYPE_PERSONAL_NOTIFICATION_FINISHED,
@@ -69,7 +104,9 @@ class UserNotificationPolicyLogRecord(models.Model):
         ERROR_NOTIFICATION_MESSAGING_BACKEND_ERROR,
         ERROR_NOTIFICATION_FORBIDDEN,
         ERROR_NOTIFICATION_TELEGRAM_USER_IS_DEACTIVATED,
-    ) = range(27)
+        ERROR_NOTIFICATION_MOBILE_USER_HAS_NO_ACTIVE_DEVICE,
+        ERROR_NOTIFICATION_FORMATTING_ERROR,
+    ) = range(29)
 
     # for this errors we want to send message to general log channel
     ERRORS_TO_SEND_IN_SLACK_CHANNEL = [
@@ -110,6 +147,15 @@ class UserNotificationPolicyLogRecord(models.Model):
     notification_step = models.IntegerField(choices=UserNotificationPolicy.Step.choices, null=True, default=None)
     notification_channel = models.IntegerField(validators=[validate_channel_choice], null=True, default=None)
 
+    def __init__(self, *args, **kwargs):
+        """
+        Needed for when we do something like this:
+        notification_policy = UserNotificationPolicy(arg1="foo", ...)
+        notification_policy.save()
+        """
+        _check_if_notification_policy_is_transient_fallback(kwargs)
+        super().__init__(*args, **kwargs)
+
     def rendered_notification_log_line(self, for_slack=False, html=False):
         timeline = render_relative_timeline(self.created_at, self.alert_group.started_at)
 
@@ -125,9 +171,10 @@ class UserNotificationPolicyLogRecord(models.Model):
     def rendered_notification_log_line_json(self):
         time = humanize.naturaldelta(self.alert_group.started_at - self.created_at)
         created_at = DateTimeField().to_representation(self.created_at)
-        author = self.author.short() if self.author is not None else None
+        organization = self.alert_group.channel.organization
+        author = self.author.short(organization) if self.author is not None else None
 
-        sf = SlackFormatter(self.alert_group.channel.organization)
+        sf = SlackFormatter(organization)
         action = sf.format(self.render_log_line_action(substitute_author_with_tag=True))
         action = clean_markup(action)
 
@@ -170,7 +217,7 @@ class UserNotificationPolicyLogRecord(models.Model):
                 result += f"SMS to {user_verbal} was delivered successfully"
             elif notification_channel == UserNotificationPolicy.NotificationChannel.PHONE_CALL:
                 result += f"phone call to {user_verbal} was successful"
-            elif notification_channel is None:
+            else:
                 result += f"notification to {user_verbal} was delivered successfully"
         elif self.type == UserNotificationPolicyLogRecord.TYPE_PERSONAL_NOTIFICATION_FAILED:
             if self.notification_error_code == UserNotificationPolicyLogRecord.ERROR_NOTIFICATION_SMS_LIMIT_EXCEEDED:
@@ -201,7 +248,7 @@ class UserNotificationPolicyLogRecord(models.Model):
                 self.notification_error_code
                 == UserNotificationPolicyLogRecord.ERROR_NOTIFICATION_POSTING_TO_SLACK_IS_DISABLED
             ):
-                result += f"failed to notify {user_verbal} in Slack, because the incident is not posted to Slack (reason: Slack is disabled for the route)"
+                result += f"failed to notify {user_verbal} in Slack (reason: {self.reason})"
             elif (
                 self.notification_error_code
                 == UserNotificationPolicyLogRecord.ERROR_NOTIFICATION_POSTING_TO_TELEGRAM_IS_DISABLED
@@ -264,6 +311,13 @@ class UserNotificationPolicyLogRecord(models.Model):
                 == UserNotificationPolicyLogRecord.ERROR_NOTIFICATION_TELEGRAM_USER_IS_DEACTIVATED
             ):
                 result += f"failed to send telegram message to {user_verbal} because user has been deactivated"
+            elif (
+                self.notification_error_code
+                == UserNotificationPolicyLogRecord.ERROR_NOTIFICATION_MOBILE_USER_HAS_NO_ACTIVE_DEVICE
+            ):
+                result += f"failed to send push notification to {user_verbal} because user has no device set up"
+            elif self.notification_error_code == UserNotificationPolicyLogRecord.ERROR_NOTIFICATION_FORMATTING_ERROR:
+                result += f"failed to send message to {user_verbal} due to a formatting error"
             else:
                 # TODO: handle specific backend errors
                 try:

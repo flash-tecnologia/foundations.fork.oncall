@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { ReactElement, useEffect, useRef, useState } from 'react';
 
 import { Tooltip } from '@grafana/ui';
 import cn from 'classnames/bind';
@@ -9,14 +9,14 @@ import { TEXT_ELLIPSIS_CLASS } from 'utils/consts';
 const cx = cn.bind(styles);
 
 interface TextEllipsisTooltipProps {
-  content: string;
+  content?: string;
   queryClassName?: string;
   placement?: string;
   className?: string;
-  children: JSX.Element | JSX.Element[];
+  children: ReactElement | ReactElement[];
 }
 
-const TextEllipsisTooltip: React.FC<TextEllipsisTooltipProps> = ({
+export const TextEllipsisTooltip: React.FC<TextEllipsisTooltipProps> = ({
   queryClassName = TEXT_ELLIPSIS_CLASS,
   className,
   content: textContent,
@@ -56,5 +56,3 @@ const TextEllipsisTooltip: React.FC<TextEllipsisTooltipProps> = ({
     setIsEllipsis(el.offsetHeight < el.scrollHeight);
   }
 };
-
-export default TextEllipsisTooltip;

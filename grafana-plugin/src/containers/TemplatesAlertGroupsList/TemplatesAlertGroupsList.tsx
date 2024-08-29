@@ -1,42 +1,38 @@
 import React, { useEffect, useState } from 'react';
 
-import { Button, HorizontalGroup, Icon, IconButton, Badge, LoadingPlaceholder } from '@grafana/ui';
+import { Button, Icon, IconButton, Badge, LoadingPlaceholder, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { debounce } from 'lodash-es';
 
-import MonacoEditor, { MONACO_LANGUAGE } from 'components/MonacoEditor/MonacoEditor';
+import { MonacoEditor, MonacoLanguage } from 'components/MonacoEditor/MonacoEditor';
 import { MONACO_EDITABLE_CONFIG } from 'components/MonacoEditor/MonacoEditor.config';
-import Text from 'components/Text/Text';
-import TooltipBadge from 'components/TooltipBadge/TooltipBadge';
-import { AlertReceiveChannel } from 'models/alert_receive_channel/alert_receive_channel.types';
-import { AlertTemplatesDTO } from 'models/alert_templates';
-import { Alert } from 'models/alertgroup/alertgroup.types';
-import { OutgoingWebhook, OutgoingWebhookResponse } from 'models/outgoing_webhook/outgoing_webhook.types';
+import { Text } from 'components/Text/Text';
+import { TooltipBadge } from 'components/TooltipBadge/TooltipBadge';
+import { TemplatePage } from 'containers/TemplatePreview/TemplatePreview';
+import { AlertTemplatesDTO } from 'models/alert_templates/alert_templates';
+import { AlertGroupHelper } from 'models/alertgroup/alertgroup.helpers';
+import { OutgoingWebhookResponse } from 'models/outgoing_webhook/outgoing_webhook.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { useStore } from 'state/useStore';
 
 import styles from './TemplatesAlertGroupsList.module.css';
 
 const cx = cn.bind(styles);
 
-export enum TEMPLATE_PAGE {
-  Integrations,
-  Webhooks,
-}
-
 interface TemplatesAlertGroupsListProps {
-  templatePage: TEMPLATE_PAGE;
+  templatePage: TemplatePage;
   templates: AlertTemplatesDTO[];
-  alertReceiveChannelId?: AlertReceiveChannel['id'];
-  outgoingwebhookId?: OutgoingWebhook['id'];
+  alertReceiveChannelId?: ApiSchemas['AlertReceiveChannel']['id'];
+  outgoingwebhookId?: ApiSchemas['Webhook']['id'];
   heading?: string;
 
-  onSelectAlertGroup?: (alertGroup: Alert) => void;
+  onSelectAlertGroup?: (alertGroup: ApiSchemas['AlertGroup']) => void;
 
   onEditPayload?: (payload: string) => void;
   onLoadAlertGroupsList?: (isRecentAlertExising: boolean) => void;
 }
 
-const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
+export const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
   const {
     templatePage,
     heading = 'Recent Alert groups',
@@ -57,16 +53,18 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
   const [isEditMode, setIsEditMode] = useState(false);
 
   useEffect(() => {
-    if (templatePage === TEMPLATE_PAGE.Webhooks) {
-      if (outgoingwebhookId !== 'new') {
-        store.outgoingWebhookStore.getLastResponses(outgoingwebhookId).then(setOutgoingWebhookLastResponses);
-      }
-    } else if (templatePage === TEMPLATE_PAGE.Integrations) {
-      store.alertGroupStore.getAlertGroupsForIntegration(alertReceiveChannelId).then((result) => {
+    (async () => {
+      if (templatePage === TemplatePage.Webhooks) {
+        if (outgoingwebhookId !== 'new') {
+          const res = await store.outgoingWebhookStore.getLastResponses(outgoingwebhookId);
+          setOutgoingWebhookLastResponses(res);
+        }
+      } else if (templatePage === TemplatePage.Integrations) {
+        const result = await AlertGroupHelper.getAlertGroupsForIntegration(alertReceiveChannelId);
         setAlertGroupsList(result.slice(0, 30));
         onLoadAlertGroupsList(result.length > 0);
-      });
-    }
+      }
+    })();
   }, []);
 
   const getChangeHandler = () => {
@@ -84,8 +82,8 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
   // for Integrations
 
   const getAlertGroupPayload = async (id) => {
-    const groupedAlert = await store.alertGroupStore.getAlertsFromGroup(id);
-    const currentIncidentRawResponse = await store.alertGroupStore.getPayloadForIncident(groupedAlert?.alerts[0]?.id);
+    const groupedAlert = await AlertGroupHelper.getAlertsFromGroup(id);
+    const currentIncidentRawResponse = await AlertGroupHelper.getPayloadForIncident(groupedAlert?.alerts[0]?.id);
     setSelectedTitle(getAlertGroupName(groupedAlert));
     setSelectedPayload(currentIncidentRawResponse?.raw_request_data);
 
@@ -94,7 +92,7 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
     onEditPayload(JSON.stringify(currentIncidentRawResponse?.raw_request_data));
   };
 
-  const getAlertGroupName = (alertGroup: Alert) => {
+  const getAlertGroupName = (alertGroup: ApiSchemas['AlertGroup']) => {
     // Integrations page
     return alertGroup.inside_organization_number
       ? `#${alertGroup.inside_organization_number} ${alertGroup.render_for_web?.title}`
@@ -125,20 +123,20 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
       {isEditMode ? (
         <>
           <div className={cx('template-block-title-edit-mode')}>
-            <HorizontalGroup justify="space-between">
+            <Stack justifyContent="space-between">
               <Text>Edit custom payload</Text>
 
-              <HorizontalGroup>
+              <Stack>
                 <IconButton aria-label="List View" name="times" onClick={returnToListView} />
-              </HorizontalGroup>
-            </HorizontalGroup>
+              </Stack>
+            </Stack>
           </div>
           <div className={cx('alert-groups-editor')}>
             <MonacoEditor
               value={null}
               disabled={true}
               useAutoCompleteList={false}
-              language={MONACO_LANGUAGE.json}
+              language={MonacoLanguage.json}
               data={templates}
               monacoOptions={{
                 ...MONACO_EDITABLE_CONFIG,
@@ -152,21 +150,21 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
       ) : (
         <>
           <div className={cx('template-block-title')}>
-            <HorizontalGroup justify="space-between" wrap>
-              <HorizontalGroup>
+            <Stack justifyContent="space-between" wrap="wrap">
+              <Stack>
                 <Text>{heading}</Text>
                 {/* <Tooltip content="Here will be information about alert groups" placement="top">
                   <Icon name="info-circle" />
                 </Tooltip> */}
-              </HorizontalGroup>
+              </Stack>
 
               <Button variant="secondary" fill="outline" onClick={() => setIsEditMode(true)} size="sm">
                 Use custom payload
               </Button>
-            </HorizontalGroup>
+            </Stack>
           </div>
           <div className={cx('alert-groups-list')}>
-            {templatePage === TEMPLATE_PAGE.Webhooks ? renderOutgoingWebhookLastResponses() : renderAlertGroupList()}
+            {templatePage === TemplatePage.Webhooks ? renderOutgoingWebhookLastResponses() : renderAlertGroupList()}
           </div>
         </>
       )}
@@ -245,13 +243,13 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
     return (
       <>
         <div className={cx('template-block-title-edit-mode')}>
-          <HorizontalGroup justify="space-between">
+          <Stack justifyContent="space-between">
             <Text>Edit custom payload</Text>
 
-            <HorizontalGroup>
+            <Stack>
               <IconButton aria-label="List View" name="times" onClick={() => returnToListView()} />
-            </HorizontalGroup>
-          </HorizontalGroup>
+            </Stack>
+          </Stack>
         </div>
         <div className={cx('alert-groups-editor')}>
           <MonacoEditor
@@ -261,7 +259,7 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
             onChange={getChangeHandler()}
             showLineNumbers
             useAutoCompleteList={false}
-            language={MONACO_LANGUAGE.json}
+            language={MonacoLanguage.json}
             monacoOptions={MONACO_EDITABLE_CONFIG}
           />
         </div>
@@ -299,7 +297,7 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
               height="100%"
               onChange={getChangeHandler()}
               useAutoCompleteList={false}
-              language={MONACO_LANGUAGE.json}
+              language={MonacoLanguage.json}
               monacoOptions={{
                 ...MONACO_EDITABLE_CONFIG,
                 readOnly: true,
@@ -311,5 +309,3 @@ const TemplatesAlertGroupsList = (props: TemplatesAlertGroupsListProps) => {
     );
   }
 };
-
-export default TemplatesAlertGroupsList;

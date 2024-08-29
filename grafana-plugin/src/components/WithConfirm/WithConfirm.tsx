@@ -5,9 +5,10 @@ import { ConfirmModal, ConfirmModalProps } from '@grafana/ui';
 type WithConfirmProps = Partial<ConfirmModalProps> & {
   children: ReactElement;
   disabled?: boolean;
+  skip?: boolean;
 };
 
-const WithConfirm: React.FC<WithConfirmProps> = ({
+export const WithConfirm: React.FC<WithConfirmProps> = ({
   title = 'Are you sure to delete?',
   confirmText = 'Delete',
   body,
@@ -15,14 +16,24 @@ const WithConfirm: React.FC<WithConfirmProps> = ({
   confirmationText,
   children,
   disabled,
+  skip = false,
+  modalClass,
 }) => {
   const [showConfirmation, setShowConfirmation] = useState<boolean>(false);
 
-  const onClickCallback = useCallback((event) => {
-    event.stopPropagation();
+  const onClickCallback = useCallback(
+    (event) => {
+      if (skip) {
+        children.props.onClick?.();
+        return;
+      }
 
-    setShowConfirmation(true);
-  }, []);
+      event.stopPropagation();
+
+      setShowConfirmation(true);
+    },
+    [skip]
+  );
 
   const onConfirmCallback = useCallback(() => {
     if (children.props.onClick) {
@@ -47,6 +58,7 @@ const WithConfirm: React.FC<WithConfirmProps> = ({
           onDismiss={() => {
             setShowConfirmation(false);
           }}
+          modalClass={modalClass}
         />
       )}
       {React.cloneElement(children, {
@@ -56,5 +68,3 @@ const WithConfirm: React.FC<WithConfirmProps> = ({
     </>
   );
 };
-
-export default WithConfirm;

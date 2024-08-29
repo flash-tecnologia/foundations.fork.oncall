@@ -8,12 +8,6 @@ from celery.app.log import TaskFormatter
 from celery.utils.debug import memdump, sample_mem
 from celery.utils.log import get_task_logger
 from django.conf import settings
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.celery import CeleryInstrumentor
-from opentelemetry.instrumentation.pymysql import PyMySQLInstrumentor
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings.prod")
 
@@ -61,15 +55,17 @@ def on_worker_ready(*args, **kwargs):
         register_telegram_webhook.delay()
 
 
-if settings.OTEL_TRACING_ENABLED and settings.OTEL_EXPORTER_OTLP_ENDPOINT:
-
-    @celery.signals.worker_process_init.connect(weak=False)
-    def init_celery_tracing(*args, **kwargs):
-        trace.set_tracer_provider(TracerProvider())
-        span_processor = BatchSpanProcessor(OTLPSpanExporter())
-        trace.get_tracer_provider().add_span_processor(span_processor)
-        PyMySQLInstrumentor().instrument()
-        CeleryInstrumentor().instrument()
+# Temporary disable celery auto instrumentation.
+# I'm working on propagating trace_id to logs and trying to keep setup as easy as possible
+# if settings.OTEL_TRACING_ENABLED and settings.OTEL_EXPORTER_OTLP_ENDPOINT and False:
+#
+#     @celery.signals.worker_process_init.connect(weak=False)
+#     def init_celery_tracing(*args, **kwargs):
+#         trace.set_tracer_provider(TracerProvider())
+#         span_processor = BatchSpanProcessor(OTLPSpanExporter())
+#         trace.get_tracer_provider().add_span_processor(span_processor)
+#         PyMySQLInstrumentor().instrument()
+#         CeleryInstrumentor().instrument()
 
 
 if settings.DEBUG_CELERY_TASKS_PROFILING:
@@ -99,3 +95,17 @@ if settings.PYROSCOPE_PROFILER_ENABLED:
             detect_subprocesses=True,  # detect subprocesses started by the main process; default is False
             tags={"type": "celery", "celery_worker": os.environ.get("CELERY_WORKER_QUEUE", "no_queue_specified")},
         )
+
+
+if settings.LOG_CELERY_TASK_ARGUMENTS:
+    """
+    Note: Task ID and name are already provided in TaskFormatter prefix, arguments get listed in message
+    """
+
+    @celery.signals.task_prerun.connect
+    def log_started_task_arguments(sender=None, task_id=None, task=None, args=None, kwargs=None, **extras):
+        logger.info(f"task started args={args}")
+
+    @celery.signals.task_postrun.connect
+    def log_finished_task_arguments(sender=None, task_id=None, task=None, args=None, kwargs=None, **extras):
+        logger.info(f"task finished args={args}")

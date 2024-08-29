@@ -2,8 +2,6 @@ import datetime
 import logging
 
 from django.conf import settings
-from django.core.exceptions import PermissionDenied
-from django.db import OperationalError
 from django.utils.deprecation import MiddlewareMixin
 
 logger = logging.getLogger(__name__)
@@ -12,7 +10,7 @@ logger = logging.getLogger(__name__)
 class RequestTimeLoggingMiddleware(MiddlewareMixin):
     @staticmethod
     def log_message(request, response, tag, message=""):
-        dt = datetime.datetime.utcnow()
+        dt = datetime.datetime.now(datetime.UTC)
         if not hasattr(request, "_logging_start_dt"):
             request._logging_start_dt = dt
             if request.path.startswith("/integrations/v1"):
@@ -55,37 +53,19 @@ class RequestTimeLoggingMiddleware(MiddlewareMixin):
         return response
 
 
-class BanAlertConsumptionBasedOnSettingsMiddleware(MiddlewareMixin):
+class LogRequestHeadersMiddleware:
     """
-    Banning requests for /integrations/v1
-    Banning is not guaranteed.
+    Middleware to log the request headers.
+    Introduced to debug tracing issues.
     """
 
-    def is_banned(self, path):
-        try:
-            from apps.base.models import DynamicSetting
+    def __init__(self, get_response):
+        self.get_response = get_response
 
-            banned_paths = DynamicSetting.objects.get_or_create(
-                name="ban_hammer_list",
-                defaults={
-                    "json_value": [
-                        "full_path_here",
-                    ]
-                },
-            )[0]
-            result = any(p for p in banned_paths.json_value if path.startswith(p))
-            return result
-        except OperationalError:
-            # Fallback to make sure we consume the request even if DB is down.
-            logger.info("Cannot connect to database, assuming the request is not banned by default.")
-            return False
+    def __call__(self, request):
+        # Log request headers
+        logger.info("Request Headers: %s", request.headers)
 
-    def process_request(self, request):
-        if request.path.startswith("/integrations/v1") and self.is_banned(request.path):
-            try:
-                # Consume request body since other middleware will be skipped
-                request.body
-            except Exception:
-                pass
-            logging.warning(f"{request.path} has been banned")
-            raise PermissionDenied()
+        response = self.get_response(request)
+
+        return response

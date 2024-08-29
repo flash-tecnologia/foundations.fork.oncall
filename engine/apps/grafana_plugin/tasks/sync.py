@@ -4,6 +4,7 @@ from celery.utils.log import get_task_logger
 from django.conf import settings
 from django.utils import timezone
 
+from apps.alerts.models import AlertReceiveChannel
 from apps.grafana_plugin.helpers import GcomAPIClient
 from apps.grafana_plugin.helpers.client import GrafanaAPIClient
 from apps.grafana_plugin.helpers.gcom import get_active_instance_ids, get_deleted_instance_ids, get_stack_regions
@@ -19,13 +20,16 @@ logger.setLevel(logging.DEBUG)
 # to make sure that orgs are synced every 30 minutes, SYNC_PERIOD should be a little lower
 SYNC_PERIOD = timezone.timedelta(minutes=25)
 INACTIVE_PERIOD = timezone.timedelta(minutes=55)
+CLEANUP_PERIOD = timezone.timedelta(hours=13)
 
 
 @shared_dedicated_queue_retry_task(autoretry_for=(Exception,), retry_backoff=True, max_retries=0)
 def start_sync_organizations():
     sync_threshold = timezone.now() - SYNC_PERIOD
 
-    organization_qs = Organization.objects.filter(last_time_synced__lte=sync_threshold)
+    organization_qs = Organization.objects.filter(last_time_synced__lte=sync_threshold) | Organization.objects.filter(
+        last_time_synced__isnull=True
+    )
 
     active_instance_ids, is_cloud_configured = get_active_instance_ids()
     if is_cloud_configured:
@@ -87,7 +91,7 @@ def run_organization_sync(organization_pk, force_sync):
     logger.info(f"Finish sync Organization {organization_pk}")
 
 
-@shared_dedicated_queue_retry_task(autoretry_for=(Exception,), max_retries=1)
+@shared_dedicated_queue_retry_task(autoretry_for=(Exception,), max_retries=0)
 def start_cleanup_deleted_organizations():
     sync_threshold = timezone.now() - INACTIVE_PERIOD
 
@@ -111,7 +115,7 @@ def start_cleanup_deleted_organizations():
         cleanup_organization_async.apply_async((organization_pk,), countdown=countdown)
 
 
-@shared_dedicated_queue_retry_task(autoretry_for=(Exception,), max_retries=1)
+@shared_dedicated_queue_retry_task(autoretry_for=(Exception,), max_retries=0)
 def cleanup_organization_async(organization_pk):
     cleanup_organization(organization_pk)
 
@@ -139,3 +143,38 @@ def sync_team_members_for_organization_async(organization_pk):
 
     grafana_api_client = GrafanaAPIClient(api_url=organization.grafana_url, api_token=organization.api_token)
     sync_team_members(grafana_api_client, organization)
+
+
+@shared_dedicated_queue_retry_task(autoretry_for=(Exception,), max_retries=1)
+def cleanup_empty_deleted_integrations(organization_pk, dry_run=True):
+    try:
+        organization = Organization.objects_with_deleted.get(pk=organization_pk)
+    except Organization.DoesNotExist:
+        logger.info(f"Organization {organization_pk} was not found")
+        return
+
+    integrations_qs = AlertReceiveChannel.objects_with_deleted.filter(
+        organization=organization, deleted_at__isnull=False, alert_groups=None
+    ).distinct()
+    logger.info(
+        f"Found count={len(integrations_qs)} integrations in org={organization.public_primary_key} that are both empty and deleted"
+    )
+
+    for integration in integrations_qs:
+        logger.info(
+            f"Deleting integration ppk={integration.public_primary_key} in organization={organization.stack_slug} dry_run={dry_run}"
+        )
+        if not dry_run:
+            integration.hard_delete()
+
+
+@shared_dedicated_queue_retry_task(autoretry_for=(Exception,), max_retries=0)
+def start_cleanup_deleted_integrations():
+    cleanup_threshold = timezone.now() - CLEANUP_PERIOD
+    channels_qs = AlertReceiveChannel.objects_with_deleted.filter(deleted_at__gte=cleanup_threshold)
+    organization_pks = set(channels_qs.values_list("organization_id", flat=True))
+    logger.debug(f"Found {len(organization_pks)} organizations")
+    for _, organization_pk in enumerate(organization_pks):
+        cleanup_empty_deleted_integrations.apply_async(
+            (organization_pk, False),
+        )

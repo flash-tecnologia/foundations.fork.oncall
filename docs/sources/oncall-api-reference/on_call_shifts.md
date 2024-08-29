@@ -1,10 +1,18 @@
 ---
 canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/on_call_shifts/
 title: OnCall shifts HTTP API
-weight: 600
+weight: 0
+refs:
+  pagination:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/oncall-api-reference/#pagination
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/#pagination
 ---
 
-# Create an OnCall shift
+# OnCall shifts HTTP API
+
+## Create an OnCall shift
 
 ```shell
 curl "{{API_URL}}/api/v1/on_call_shifts/" \
@@ -46,7 +54,7 @@ The above command returns JSON structured in the following way:
 | `name`                           |  Yes   |                      Yes                       | On-call shift name.                                                                                                                                                                                                                                                                                                                                                                                                |
 | `type`                           |   No   |                      Yes                       | One of: `single_event`, `recurrent_event`, `rolling_users`.                                                                                                                                                                                                                                                                                                                                                        |
 | `team_id`                        |   No   |                ID of the team.                 |
-| `time_zone`                      |   No   |                    Optional                    | On-call shift time zone. Default is local schedule time zone. **This field will override the schedule time zone if changed**. For more information see [time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).                                                                                                                                                                                 |
+| `time_zone`                      |   No   |                    Optional                    | On-call shift time zone. Default is local schedule time zone. **This field will override the schedule time zone if changed**. For more information refer to [time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).                                                                                                                                                                                 |
 | `level`                          |   No   |                    Optional                    | Priority level. The higher the value, the higher the priority. If two events overlap in one schedule, Grafana OnCall will choose the event with higher level. For example: Alex is on-call from 8AM till 11AM with level 1, Bob is on-call from 9AM till 11AM with level 2. At 10AM Grafana OnCall will notify Bob. At 8AM OnCall will notify Alex.                                                                |
 | `start`                          |   No   |                      Yes                       | Start time of the on-call shift. This parameter takes a date format as `yyyy-MM-dd'T'HH:mm:ss` (for example "2020-09-05T08:00:00").                                                                                                                                                                                                                                                                                |
 | `duration`                       |   No   |                      Yes                       | Duration of the event.                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -61,13 +69,13 @@ The above command returns JSON structured in the following way:
 | `rolling_users`                  |   No   |                    Optional                    | List of lists with on-call users (for `rolling_users` event type). Grafana OnCall will iterate over lists of users for every time frame specified in `frequency`. For example: there are two lists of users in `rolling_users` : [[Alex, Bob], [Alice]] and `frequency` = `daily` . This means that the first day Alex and Bob will be notified. The next day: Alice. The day after: Alex and Bob again and so on. |
 | `start_rotation_from_user_index` |   No   |                    Optional                    | Index of the list of users in `rolling_users`, from which on-call rotation starts. By default, the start index is `0`                                                                                                                                                                                                                                                                                              |
 
-Please see [RFC 5545](https://tools.ietf.org/html/rfc5545#section-3.3.10) for more information about recurrence rules.
+For more information about recurrence rules, refer to [RFC 5545](https://tools.ietf.org/html/rfc5545#section-3.3.10).
 
 **HTTP request**
 
 `POST {{API_URL}}/api/v1/on_call_shifts/`
 
-# Get OnCall shifts
+## Get OnCall shifts
 
 ```shell
 curl "{{API_URL}}/api/v1/on_call_shifts/OH3V5FYQEYJ6M/" \
@@ -96,7 +104,7 @@ The above command returns JSON structured in the following way:
 
 `GET {{API_URL}}/api/v1/on_call_shifts/<ON_CALL_SHIFT_ID>/`
 
-# List OnCall shifts
+## List OnCall shifts
 
 ```shell
 curl "{{API_URL}}/api/v1/on_call_shifts/" \
@@ -148,6 +156,8 @@ The above command returns JSON structured in the following way:
 }
 ```
 
+> **Note**: The response is [paginated](ref:pagination). You may need to make multiple requests to get all records.
+
 The following available filter parameters should be provided as `GET` arguments:
 
 - `name` (Exact match)
@@ -157,7 +167,7 @@ The following available filter parameters should be provided as `GET` arguments:
 
 `GET {{API_URL}}/api/v1/on_call_shifts/`
 
-# Update OnCall shift
+## Update OnCall shift
 
 ```shell
 curl "{{API_URL}}/api/v1/on_call_shifts/OH3V5FYQEYJ6M/" \
@@ -196,7 +206,7 @@ The above command returns JSON structured in the following way:
 
 `PUT {{API_URL}}/api/v1/on_call_shifts/<ON_CALL_SHIFT_ID>/`
 
-# Delete OnCall shift
+## Delete OnCall shift
 
 ```shell
 curl "{{API_URL}}/api/v1/on_call_shifts/OH3V5FYQEYJ6M/" \

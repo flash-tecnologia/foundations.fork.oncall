@@ -1,13 +1,15 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 
+import { css } from '@emotion/css';
 import { DateTime, dateTime } from '@grafana/data';
-import { DatePickerWithInput, TimeOfDayPicker, VerticalGroup } from '@grafana/ui';
+import { DatePickerWithInput, TimeOfDayPicker, useStyles2, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import dayjs from 'dayjs';
+import { observer } from 'mobx-react';
 
-import Text from 'components/Text/Text';
-import { toDate } from 'containers/RotationForm/RotationForm.helpers';
-import { Timezone } from 'models/timezone/timezone.types';
+import { Text } from 'components/Text/Text';
+import { toDatePickerDate } from 'containers/Rotations/Rotations.helpers';
+import { toDateWithTimezoneOffset } from 'pages/schedule/Schedule.helpers';
 
 import styles from 'containers/RotationForm/RotationForm.module.css';
 
@@ -15,72 +17,86 @@ const cx = cn.bind(styles);
 
 interface DateTimePickerProps {
   value: dayjs.Dayjs;
-  timezone: Timezone;
+  utcOffset?: number;
   onChange: (value: dayjs.Dayjs) => void;
   disabled?: boolean;
-  minMoment?: dayjs.Dayjs;
   onFocus?: () => void;
   onBlur?: () => void;
   error?: string[];
 }
 
-const DateTimePicker = (props: DateTimePickerProps) => {
-  const { value: propValue, minMoment, timezone, onChange, disabled, onFocus, onBlur, error } = props;
+export const DateTimePicker = observer(
+  ({ value: propValue, utcOffset, onChange, disabled, onFocus, onBlur, error }: DateTimePickerProps) => {
+    const styles = useStyles2(getStyles);
 
-  const value = useMemo(() => toDate(propValue, timezone), [propValue, timezone]);
+    const handleDateChange = (value: Date) => {
+      const newDate = toDateWithTimezoneOffset(dayjs(value), utcOffset)
+        .set('date', 1)
+        .set('months', value.getMonth())
+        .set('date', value.getDate())
+        .set('hours', propValue.hour())
+        .set('minutes', propValue.minute())
+        .set('second', 0)
+        .set('milliseconds', 0);
 
-  const minDate = useMemo(() => (minMoment ? toDate(minMoment, timezone) : undefined), [minMoment, timezone]);
+      onChange(newDate);
+    };
 
-  const handleDateChange = (newDate: Date) => {
-    const localMoment = dayjs().tz(timezone).utcOffset() === 0 ? dayjs().utc() : dayjs().tz(timezone);
+    const handleTimeChange = (timeMoment: DateTime) => {
+      const newDate = toDateWithTimezoneOffset(propValue, utcOffset)
+        .set('hour', timeMoment.hour())
+        .set('minute', timeMoment.minute());
 
-    const newValue = localMoment
-      .set('year', newDate.getFullYear())
-      .set('month', newDate.getMonth())
-      .set('date', newDate.getDate())
-      .set('hour', value.getHours())
-      .set('minute', value.getMinutes())
-      .set('second', value.getSeconds());
+      onChange(newDate);
+    };
 
-    onChange(newValue);
-  };
-  const handleTimeChange = (newMoment: DateTime) => {
-    const localMoment = dayjs().tz(timezone).utcOffset() === 0 ? dayjs().utc() : dayjs().tz(timezone);
-    const newDate = newMoment.toDate();
-    const newValue = localMoment
-      .set('year', value.getFullYear())
-      .set('month', value.getMonth())
-      .set('date', value.getDate())
-      .set('hour', newDate.getHours())
-      .set('minute', newDate.getMinutes())
-      .set('second', newDate.getSeconds());
+    const getTimeValueInSelectedTimezone = () => {
+      const dateInOffset = toDateWithTimezoneOffset(propValue, utcOffset);
 
-    onChange(newValue);
-  };
+      const time = dateTime(dateInOffset.format());
+      time.set('hour', dateInOffset.hour());
+      time.set('minute', dateInOffset.minute());
+      time.set('seconds', dateInOffset.second());
+      return time;
+    };
 
-  return (
-    <VerticalGroup>
-      <div style={{ display: 'flex', flexWrap: 'nowrap', gap: '8px' }}>
-        <div
-          onFocus={onFocus}
-          onBlur={onBlur}
-          style={{ width: '58%' }}
-          className={cx({ 'control--error': Boolean(error) })}
-        >
-          <DatePickerWithInput open minDate={minDate} disabled={disabled} value={value} onChange={handleDateChange} />
+    return (
+      <Stack direction="column">
+        <div className={styles.wrapper}>
+          <div
+            onFocus={onFocus}
+            onBlur={onBlur}
+            style={{ width: '58%' }}
+            className={cx({ 'control--error': Boolean(error) })}
+          >
+            <DatePickerWithInput
+              open
+              disabled={disabled}
+              value={toDatePickerDate(propValue, utcOffset)}
+              onChange={handleDateChange}
+            />
+          </div>
+          <div
+            onFocus={onFocus}
+            onBlur={onBlur}
+            style={{ width: '42%' }}
+            className={cx({ 'control--error': Boolean(error) })}
+            data-testid="date-time-picker"
+          >
+            <TimeOfDayPicker disabled={disabled} value={getTimeValueInSelectedTimezone()} onChange={handleTimeChange} />
+          </div>
         </div>
-        <div
-          onFocus={onFocus}
-          onBlur={onBlur}
-          style={{ width: '42%' }}
-          className={cx({ 'control--error': Boolean(error) })}
-        >
-          <TimeOfDayPicker disabled={disabled} value={dateTime(value)} onChange={handleTimeChange} />
-        </div>
-      </div>
-      {error && <Text type="danger">{error}</Text>}
-    </VerticalGroup>
-  );
-};
+        {error && <Text type="danger">{error}</Text>}
+      </Stack>
+    );
+  }
+);
 
-export default DateTimePicker;
+const getStyles = () => ({
+  wrapper: css`
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 8px;
+    z-index: 2;
+  `,
+});

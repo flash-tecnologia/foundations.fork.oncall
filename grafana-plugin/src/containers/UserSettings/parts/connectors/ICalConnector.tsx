@@ -1,52 +1,52 @@
 import React, { useEffect, useState } from 'react';
 
-import { Alert, Button, HorizontalGroup, InlineField, Input, LoadingPlaceholder, Tooltip } from '@grafana/ui';
+import { Alert, Button, InlineField, Input, LoadingPlaceholder, Stack, Tooltip } from '@grafana/ui';
 import CopyToClipboard from 'react-copy-to-clipboard';
 
-import WithConfirm from 'components/WithConfirm/WithConfirm';
+import { WithConfirm } from 'components/WithConfirm/WithConfirm';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
-import { User } from 'models/user/user.types';
+import { UserHelper } from 'models/user/user.helpers';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { useStore } from 'state/useStore';
-import { openNotification } from 'utils';
-import { UserActions } from 'utils/authorization';
+import { UserActions } from 'utils/authorization/authorization';
+import { StackSize } from 'utils/consts';
+import { openNotification } from 'utils/utils';
 
 // eslint-disable-next-line @typescript-eslint/naming-convention
 interface ICalConnectorProps {
-  id: User['pk'];
+  id: ApiSchemas['User']['pk'];
 }
 
-const ICalConnector = (props: ICalConnectorProps) => {
+export const ICalConnector = (props: ICalConnectorProps) => {
   const { id } = props;
-
   const store = useStore();
-  const { userStore } = store;
-
   const [showiCalLink, setShowiCalLink] = useState<string>(undefined);
   const [isiCalLinkExisting, setIsiCalLinkExisting] = useState<boolean>(false);
   const [iCalLoading, setiCalLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    userStore
-      .getiCalLink(id)
-      .then((_res) => {
+    (async () => {
+      try {
+        await UserHelper.getiCalLink(id);
         setIsiCalLinkExisting(true);
         setiCalLoading(false);
-      })
-      .catch((_res) => {
+      } catch (_err) {
         setIsiCalLinkExisting(false);
         setiCalLoading(false);
-      });
+      }
+    })();
   }, []);
 
   const handleCreateiCalLink = async () => {
     setIsiCalLinkExisting(true);
-    await userStore.createiCalLink(id).then((res) => setShowiCalLink(res?.export_url));
+    const res = await UserHelper.createiCalLink(id);
+    setShowiCalLink(res?.export_url);
   };
 
   const handleRevokeiCalLink = async () => {
     setIsiCalLinkExisting(false);
     setShowiCalLink(undefined);
-    await userStore.deleteiCalLink(id);
+    await UserHelper.deleteiCalLink(id);
   };
 
   const isCurrentUser = id === store.userStore.currentUserPk;
@@ -66,7 +66,7 @@ const ICalConnector = (props: ICalConnectorProps) => {
                     labelWidth={12}
                     tooltip={'Secret iCal export link to add your assigned on call shifts to your calendar'}
                   >
-                    <HorizontalGroup spacing="xs">
+                    <Stack gap={StackSize.xs}>
                       <Tooltip content={'In case you lost your iCal link you can revoke it and generate a new one.'}>
                         <Input disabled value={showiCalLink} />
                       </Tooltip>
@@ -76,9 +76,11 @@ const ICalConnector = (props: ICalConnectorProps) => {
                           openNotification('iCal link is copied');
                         }}
                       >
-                        <Button icon="copy">Copy</Button>
+                        <Button icon="copy" data-testid="copy-ical-link">
+                          Copy
+                        </Button>
                       </CopyToClipboard>
-                    </HorizontalGroup>
+                    </Stack>
                   </InlineField>
                   <Alert severity="warning" title="Make sure you copy it - you won't be able to access it again." />
                 </>
@@ -90,7 +92,7 @@ const ICalConnector = (props: ICalConnectorProps) => {
                       labelWidth={12}
                       tooltip={'Secret iCal export link to add your assigned on call shifts to your calendar'}
                     >
-                      <HorizontalGroup spacing="xs">
+                      <Stack gap={StackSize.xs}>
                         <Tooltip content={'In case you lost your iCal link you can revoke it and generate a new one.'}>
                           <Input value={'***'} />
                         </Tooltip>
@@ -100,11 +102,16 @@ const ICalConnector = (props: ICalConnectorProps) => {
                           }
                           confirmText="Revoke"
                         >
-                          <Button icon="trash-alt" variant="destructive" onClick={handleRevokeiCalLink}>
+                          <Button
+                            icon="trash-alt"
+                            variant="destructive"
+                            onClick={handleRevokeiCalLink}
+                            data-testid="revoke-ical-link"
+                          >
                             Revoke
                           </Button>
                         </WithConfirm>
-                      </HorizontalGroup>
+                      </Stack>
                     </InlineField>
                   </WithPermissionControlTooltip>
                 </>
@@ -117,7 +124,7 @@ const ICalConnector = (props: ICalConnectorProps) => {
                 labelWidth={12}
                 tooltip={'Secret iCal export link to add your assigned on call shifts to your calendar'}
               >
-                <Button onClick={handleCreateiCalLink} variant="secondary">
+                <Button onClick={handleCreateiCalLink} variant="secondary" data-testid="create-ical-link">
                   Create
                 </Button>
               </InlineField>
@@ -129,5 +136,3 @@ const ICalConnector = (props: ICalConnectorProps) => {
     </>
   );
 };
-
-export default ICalConnector;

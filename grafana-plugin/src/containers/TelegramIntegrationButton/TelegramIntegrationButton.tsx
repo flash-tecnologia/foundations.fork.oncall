@@ -1,16 +1,17 @@
 import React, { useCallback, useState, useEffect } from 'react';
 
-import { Button, Modal, Icon, HorizontalGroup, VerticalGroup, Field, Input } from '@grafana/ui';
+import { Button, Modal, Icon, Stack, Field, Input } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 import CopyToClipboard from 'react-copy-to-clipboard';
 
-import Block from 'components/GBlock/Block';
-import Text from 'components/Text/Text';
+import { Block } from 'components/GBlock/Block';
+import { Text } from 'components/Text/Text';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
 import { useStore } from 'state/useStore';
-import { openNotification } from 'utils';
-import { UserActions } from 'utils/authorization';
+import { UserActions } from 'utils/authorization/authorization';
+import { StackSize } from 'utils/consts';
+import { openNotification } from 'utils/utils';
 
 import styles from './TelegramIntegrationButton.module.css';
 
@@ -22,7 +23,7 @@ interface TelegramIntegrationProps {
   onUpdate: () => void;
 }
 
-const TelegramIntegrationButton = observer((props: TelegramIntegrationProps) => {
+export const TelegramIntegrationButton = observer((props: TelegramIntegrationProps) => {
   const { disabled, size = 'md', onUpdate } = props;
 
   const [showModal, setShowModal] = useState<boolean>(false);
@@ -67,15 +68,16 @@ const TelegramModal = (props: TelegramModalProps) => {
   const [botLink, setBotLink] = useState<string>();
 
   useEffect(() => {
-    telegramChannelStore.getTelegramVerificationCode().then((res) => {
+    (async () => {
+      const res = await telegramChannelStore.getTelegramVerificationCode();
       setVerificationCode(res.telegram_code);
       setBotLink(res.bot_link);
-    });
+    })();
   }, []);
 
   return (
     <Modal title="Adding Telegram Channel" closeOnEscape isOpen onDismiss={onUpdate}>
-      <VerticalGroup spacing="md">
+      <Stack direction="column" gap={StackSize.md}>
         <Block withBackground bordered className={cx('telegram-block')}>
           <Text type="secondary">
             If you already have a private channel to work with OnCall, use the following activation code:
@@ -139,17 +141,15 @@ const TelegramModal = (props: TelegramModalProps) => {
           </Field>
         </Text>
         <Text type="secondary">7. Start to manage alerts in your team Telegram workspace.</Text>
-        <HorizontalGroup justify="flex-end">
+        <Stack justifyContent="flex-end">
           <Button variant="secondary" onClick={onHide}>
             Cancel
           </Button>
           <Button variant="primary" onClick={onUpdate}>
             Done
           </Button>
-        </HorizontalGroup>
-      </VerticalGroup>
+        </Stack>
+      </Stack>
     </Modal>
   );
 };
-
-export default TelegramIntegrationButton;

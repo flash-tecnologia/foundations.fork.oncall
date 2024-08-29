@@ -1,12 +1,14 @@
 import logging
 from typing import Optional, Tuple, Union
 
+from django.conf import settings
 from telegram import Bot, InlineKeyboardMarkup, Message, ParseMode
-from telegram.error import BadRequest, InvalidToken, Unauthorized
+from telegram.error import BadRequest, InvalidToken, TelegramError, Unauthorized
 from telegram.utils.request import Request
 
 from apps.alerts.models import AlertGroup
 from apps.base.utils import live_settings
+from apps.telegram.exceptions import AlertGroupTelegramMessageDoesNotExist
 from apps.telegram.models import TelegramMessage
 from apps.telegram.renderers.keyboard import TelegramKeyboardRenderer
 from apps.telegram.renderers.message import TelegramMessageRenderer
@@ -25,6 +27,18 @@ class TelegramClient:
         if self.token is None:
             raise InvalidToken()
 
+    class BadRequestMessage:
+        CHAT_NOT_FOUND = "Chat not found"
+        MESSAGE_IS_NOT_MODIFIED = "Message is not modified"
+        MESSAGE_TO_EDIT_NOT_FOUND = "Message to edit not found"
+        NEED_ADMIN_RIGHTS_IN_THE_CHANNEL = "Need administrator rights in the channel chat"
+        MESSAGE_TO_BE_REPLIED_NOT_FOUND = "Message to be replied not found"
+
+    class UnauthorizedMessage:
+        BOT_WAS_BLOCKED_BY_USER = "Forbidden: bot was blocked by the user"
+        INVALID_TOKEN = "Invalid token"
+        USER_IS_DEACTIVATED = "Forbidden: user is deactivated"
+
     @property
     def api_client(self) -> Bot:
         return Bot(self.token, request=Request(read_timeout=15))
@@ -37,8 +51,14 @@ class TelegramClient:
             return False
 
     def register_webhook(self, webhook_url: Optional[str] = None) -> None:
-        webhook_url = webhook_url or create_engine_url("/telegram/", override_base=live_settings.TELEGRAM_WEBHOOK_HOST)
-
+        if settings.IS_OPEN_SOURCE:
+            webhook_url = webhook_url or create_engine_url(
+                "/telegram/", override_base=live_settings.TELEGRAM_WEBHOOK_HOST
+            )
+        else:
+            webhook_url = webhook_url or create_engine_url(
+                "api/v3/webhook/telegram/", override_base=live_settings.TELEGRAM_WEBHOOK_HOST
+            )
         # avoid unnecessary set_webhook calls to make sure Telegram rate limits are not exceeded
         webhook_info = self.api_client.get_webhook_info()
         if webhook_info.url == webhook_url:
@@ -88,7 +108,7 @@ class TelegramClient:
                 disable_web_page_preview=False,
             )
         except BadRequest as e:
-            logger.warning("Telegram BadRequest: {}".format(e.message))
+            logger.warning(f"Telegram BadRequest: {e.message}")
             raise
 
         return message
@@ -149,7 +169,10 @@ class TelegramClient:
             ).first()
 
             if alert_group_message is None:
-                raise Exception("No alert group message found, probably it is not saved to database yet")
+                raise AlertGroupTelegramMessageDoesNotExist(
+                    f"No alert group message found, probably it is not saved to database yet, "
+                    f"alert group: {alert_group.id}"
+                )
 
             include_title = message_type == TelegramMessage.LINK_TO_CHANNEL_MESSAGE
             link = alert_group_message.link
@@ -160,3 +183,7 @@ class TelegramClient:
             raise Exception(f"_get_message_and_keyboard with type {message_type} is not implemented")
 
         return text, keyboard
+
+    @staticmethod
+    def error_message_is(error: TelegramError, messages: list[str]) -> bool:
+        return error.message in messages

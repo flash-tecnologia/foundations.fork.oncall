@@ -40,11 +40,11 @@ def test_raw_escalation_snapshot(escalation_snapshot_test_setup):
                 "last_notified_user": None,
                 "notify_schedule": None,
                 "notify_to_group": None,
+                "notify_to_team_members": None,
                 "from_time": None,
                 "to_time": None,
                 "num_alerts_in_window": None,
                 "num_minutes_in_window": None,
-                "custom_button_trigger": None,
                 "custom_webhook": None,
                 "escalation_counter": 0,
                 "passed_last_time": None,
@@ -59,11 +59,11 @@ def test_raw_escalation_snapshot(escalation_snapshot_test_setup):
                 "last_notified_user": None,
                 "notify_schedule": None,
                 "notify_to_group": None,
+                "notify_to_team_members": None,
                 "from_time": None,
                 "to_time": None,
                 "num_alerts_in_window": None,
                 "num_minutes_in_window": None,
-                "custom_button_trigger": None,
                 "custom_webhook": None,
                 "escalation_counter": 0,
                 "passed_last_time": None,
@@ -78,11 +78,11 @@ def test_raw_escalation_snapshot(escalation_snapshot_test_setup):
                 "last_notified_user": None,
                 "notify_schedule": None,
                 "notify_to_group": None,
+                "notify_to_team_members": None,
                 "from_time": notify_if_time_step.from_time.isoformat(),
                 "to_time": notify_if_time_step.to_time.isoformat(),
                 "num_alerts_in_window": None,
                 "num_minutes_in_window": None,
-                "custom_button_trigger": None,
                 "custom_webhook": None,
                 "escalation_counter": 0,
                 "passed_last_time": None,
@@ -183,21 +183,32 @@ def test_next_escalation_policy_snapshot(escalation_snapshot_test_setup):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    "next_step_eta,expected",
+    "timedelta,time_in_past,expected",
     [
-        (None, None),
-        (timezone.now() - timezone.timedelta(weeks=50), False),
-        (timezone.now() - timezone.timedelta(minutes=4), True),
-        (timezone.now() + timezone.timedelta(minutes=4), True),
+        (None, None, None),
+        (timezone.timedelta(weeks=50), True, False),
+        (timezone.timedelta(minutes=4), True, True),
+        (timezone.timedelta(minutes=4), False, True),
     ],
 )
-def test_next_step_eta_is_valid(escalation_snapshot_test_setup, next_step_eta, expected) -> None:
+def test_next_step_eta_is_valid(escalation_snapshot_test_setup, timedelta, time_in_past, expected) -> None:
+    now = timezone.now()
+
+    if timedelta is None:
+        next_step_eta = None
+    elif time_in_past:
+        next_step_eta = now - timedelta
+    else:
+        next_step_eta = now + timedelta
+
     alert_group, _, _, _ = escalation_snapshot_test_setup
     escalation_snapshot = alert_group.escalation_snapshot
 
     escalation_snapshot.next_step_eta = next_step_eta
+    escalation_snapshot.save_to_alert_group()
+    alert_group.refresh_from_db()
 
-    assert escalation_snapshot.next_step_eta_is_valid() is expected
+    assert alert_group.next_step_eta_is_valid() is expected
 
 
 @pytest.mark.django_db

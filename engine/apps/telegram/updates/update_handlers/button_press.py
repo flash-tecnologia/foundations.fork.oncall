@@ -13,6 +13,7 @@ from apps.user_management.models import User
 
 logger = logging.getLogger(__name__)
 
+NOT_FOUND_ERROR = "Alert group not found"
 PERMISSION_DENIED = """You don't have a permission to perform this action!
 Consider connecting your Telegram account on user settings page ⚙"""
 
@@ -32,6 +33,9 @@ class ButtonPressHandler(UpdateHandler):
     def process_update(self) -> None:
         data = self.update.callback_query.data
         action_context = self._get_action_context(data)
+        if action_context is None:
+            self.update.callback_query.answer(NOT_FOUND_ERROR, show_alert=True)
+            return
 
         fn, fn_kwargs = self._map_action_context_to_fn(action_context)
         user = self._get_user(action_context)
@@ -77,7 +81,11 @@ class ButtonPressHandler(UpdateHandler):
 
         if alert_group is None:
             alert_group_pk = args[0]
-            alert_group = AlertGroup.objects.get(pk=alert_group_pk)
+            try:
+                alert_group = AlertGroup.objects.get(pk=alert_group_pk)
+            except AlertGroup.DoesNotExist:
+                logger.info(f"Alert group {alert_group_pk} does not exist")
+                return
 
         action_value = args[1]
         try:
@@ -102,15 +110,15 @@ class ButtonPressHandler(UpdateHandler):
     @staticmethod
     def _map_action_context_to_fn(action_context: ActionContext) -> Tuple[Callable, dict]:
         action_to_fn = {
-            Action.RESOLVE: "resolve_by_user",
-            Action.UNRESOLVE: "un_resolve_by_user",
-            Action.ACKNOWLEDGE: "acknowledge_by_user",
-            Action.UNACKNOWLEDGE: "un_acknowledge_by_user",
+            Action.RESOLVE: "resolve_by_user_or_backsync",
+            Action.UNRESOLVE: "un_resolve_by_user_or_backsync",
+            Action.ACKNOWLEDGE: "acknowledge_by_user_or_backsync",
+            Action.UNACKNOWLEDGE: "un_acknowledge_by_user_or_backsync",
             Action.SILENCE: {
-                "fn_name": "silence_by_user",
+                "fn_name": "silence_by_user_or_backsync",
                 "kwargs": {"silence_delay": int(action_context.action_data) if action_context.action_data else None},
             },
-            Action.UNSILENCE: "un_silence_by_user",
+            Action.UNSILENCE: "un_silence_by_user_or_backsync",
         }
 
         fn_info = action_to_fn[action_context.action]

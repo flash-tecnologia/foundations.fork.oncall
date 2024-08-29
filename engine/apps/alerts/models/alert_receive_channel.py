@@ -48,6 +48,34 @@ if typing.TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class MessagingBackendTemplatesItem:
+    title: str | None
+    message: str | None
+    image_url: str | None
+
+
+MessagingBackendTemplates = dict[str, MessagingBackendTemplatesItem]
+
+
+class AlertmanagerV2LegacyTemplates(typing.TypedDict):
+    web_title_template: str | None
+    web_message_template: str | None
+    web_image_url_template: str | None
+    sms_title_template: str | None
+    phone_call_title_template: str | None
+    source_link_template: str | None
+    grouping_id_template: str | None
+    resolve_condition_template: str | None
+    acknowledge_condition_template: str | None
+    slack_title_template: str | None
+    slack_message_template: str | None
+    slack_image_url_template: str | None
+    telegram_title_template: str | None
+    telegram_message_template: str | None
+    telegram_image_url_template: str | None
+    messaging_backends_templates: MessagingBackendTemplates | None
+
+
 def generate_public_primary_key_for_alert_receive_channel():
     prefix = "C"
     new_public_primary_key = generate_public_primary_key(prefix)
@@ -252,13 +280,22 @@ class AlertReceiveChannel(IntegrationOptionsMixin, MaintainableObject):
 
     # additional messaging backends templates
     # e.g. {'<BACKEND-ID>': {'title': 'title template', 'message': 'message template', 'image_url': 'url template'}}
-    messaging_backends_templates = models.JSONField(null=True, default=None)
+    messaging_backends_templates: MessagingBackendTemplates | None = models.JSONField(null=True, default=None)
+
+    alertmanager_v2_migrated_at = models.DateTimeField(null=True, default=None)
+    """
+    Timestamp of when Alertmanager V2 migration was run for this integration using the 'alertmanager_v2_migrate'
+    Django management command.
+    """
+
+    alertmanager_v2_backup_templates: AlertmanagerV2LegacyTemplates | None = models.JSONField(null=True, default=None)
+    """Backing up templates before the Alertmanager V2 migration, so that they can be restored if needed."""
 
     rate_limited_in_slack_at = models.DateTimeField(null=True, default=None)
     rate_limit_message_task_id = models.CharField(max_length=100, null=True, default=None)
 
-    AlertGroupCustomLabels = list[tuple[str, str | None, str | None]] | None
-    alert_group_labels_custom: AlertGroupCustomLabels = models.JSONField(null=True, default=None)
+    AlertGroupCustomLabelsDB = list[tuple[str, str | None, str | None]] | None
+    alert_group_labels_custom: AlertGroupCustomLabelsDB = models.JSONField(null=True, default=None)
     """
     Stores "custom labels" for alert group labels. Custom labels can be either "plain" or "templated".
     For plain labels, the format is: [<LABEL_KEY_ID>, <LABEL_VALUE_ID>, None]
@@ -267,6 +304,8 @@ class AlertReceiveChannel(IntegrationOptionsMixin, MaintainableObject):
 
     alert_group_labels_template: str | None = models.TextField(null=True, default=None)
     """Stores a Jinja2 template for "advanced label templating" for alert group labels."""
+
+    additional_settings: dict | None = models.JSONField(null=True, default=None)
 
     class Meta:
         constraints = [
@@ -412,7 +451,7 @@ class AlertReceiveChannel(IntegrationOptionsMixin, MaintainableObject):
         return Alert.objects.filter(group__channel=self).count()
 
     @property
-    def is_able_to_autoresolve(self):
+    def is_able_to_autoresolve(self) -> bool:
         return self.config.is_able_to_autoresolve
 
     @property
@@ -420,7 +459,7 @@ class AlertReceiveChannel(IntegrationOptionsMixin, MaintainableObject):
         return self.config.is_demo_alert_enabled
 
     @property
-    def description(self):
+    def description(self) -> str | None:
         # TODO: AMV2: Remove this check after legacy integrations are migrated.
         if self.integration == AlertReceiveChannel.INTEGRATION_LEGACY_GRAFANA_ALERTING:
             contact_points = self.contact_points.all()
@@ -496,7 +535,7 @@ class AlertReceiveChannel(IntegrationOptionsMixin, MaintainableObject):
         return urljoin(self.organization.web_link, f"integrations/{self.public_primary_key}")
 
     @property
-    def integration_url(self):
+    def integration_url(self) -> str | None:
         if self.integration in [
             AlertReceiveChannel.INTEGRATION_MANUAL,
             AlertReceiveChannel.INTEGRATION_SLACK_CHANNEL,
@@ -595,7 +634,7 @@ class AlertReceiveChannel(IntegrationOptionsMixin, MaintainableObject):
 
     # Heartbeat
     @property
-    def is_available_for_integration_heartbeat(self):
+    def is_available_for_integration_heartbeat(self) -> bool:
         return self.heartbeat_module is not None
 
     @property
@@ -627,7 +666,7 @@ class AlertReceiveChannel(IntegrationOptionsMixin, MaintainableObject):
         return getattr(heartbeat, self.integration, None)
 
     # Demo alerts
-    def send_demo_alert(self, payload=None):
+    def send_demo_alert(self, payload: typing.Optional[typing.Dict] = None) -> None:
         logger.info(f"send_demo_alert integration={self.pk}")
 
         if not self.is_demo_alert_enabled:
@@ -738,6 +777,16 @@ def listen_for_alertreceivechannel_model_save(
     elif instance.deleted_at:
         if instance.is_alerting_integration:
             disconnect_integration_from_alerting_contact_points.apply_async((instance.pk,), countdown=5)
+        # delete alert receive channel connections
+        instance.connected_alert_receive_channels.all().delete()
+        instance.source_alert_receive_channels.all().delete()
+        # delete connected webhooks
+        if instance.additional_settings is not None:
+            for webhook in instance.webhooks.filter(is_from_connected_integration=True):
+                if webhook.get_source_alert_receive_channel() == instance:
+                    webhook.delete()
+        # delete connected auth tokens
+        instance.auth_tokens.all().delete()
 
         metrics_remove_deleted_integration_from_cache(instance)
     else:

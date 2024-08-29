@@ -1,23 +1,27 @@
 import React, { ReactElement, useMemo, useState } from 'react';
 
-// Note: these imports are available in Grafana>=10.0.
-// @ts-expect-error
 import { PluginExtensionLink } from '@grafana/data';
-// @ts-expect-error
-import { getPluginLinkExtensions } from '@grafana/runtime';
+import {
+  type GetPluginExtensionsOptions,
+  getPluginLinkExtensions,
+  usePluginLinks as originalUsePluginLinks,
+} from '@grafana/runtime';
 import { Dropdown, ToolbarButton } from '@grafana/ui';
 import { OnCallPluginExtensionPoints } from 'types';
 
-import { Alert } from 'models/alertgroup/alertgroup.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 
 import { ExtensionLinkMenu } from './ExtensionLinkMenu';
 
 interface Props {
-  incident: Alert;
+  incident: ApiSchemas['AlertGroup'];
   extensionPointId: OnCallPluginExtensionPoints;
   declareIncidentLink?: string;
   grafanaIncidentId: string | null;
 }
+
+// `usePluginLinks()` is only available in Grafana>=11.1.0, so we have a fallback for older versions
+const usePluginLinks = originalUsePluginLinks === undefined ? usePluginLinksFallback : originalUsePluginLinks;
 
 export function ExtensionLinkDropdown({
   incident,
@@ -27,15 +31,15 @@ export function ExtensionLinkDropdown({
 }: Props): ReactElement | null {
   const [isOpen, setIsOpen] = useState(false);
   const context = useExtensionPointContext(incident);
-  const extensions = useExtensionLinks(context, extensionPointId);
+  const { links, isLoading } = usePluginLinks({ context, extensionPointId, limitPerPlugin: 3 });
 
-  if (extensions.length === 0) {
+  if (links.length === 0 || isLoading) {
     return null;
   }
 
   const menu = (
     <ExtensionLinkMenu
-      extensions={extensions}
+      extensions={links}
       declareIncidentLink={declareIncidentLink}
       grafanaIncidentId={grafanaIncidentId}
     />
@@ -50,25 +54,35 @@ export function ExtensionLinkDropdown({
   );
 }
 
-function useExtensionPointContext(incident: Alert): PluginExtensionOnCallAlertGroupContext {
+function useExtensionPointContext(incident: ApiSchemas['AlertGroup']): PluginExtensionOnCallAlertGroupContext {
   return { alertGroup: incident };
 }
 
-function useExtensionLinks<T>(context: T, extensionPointId: OnCallPluginExtensionPoints): PluginExtensionLink[] {
+function usePluginLinksFallback({ context, extensionPointId, limitPerPlugin }: GetPluginExtensionsOptions): {
+  links: PluginExtensionLink[];
+  isLoading: boolean;
+} {
   return useMemo(() => {
     // getPluginLinkExtensions is available in Grafana>=10.0,
     // so will be undefined in earlier versions. Just return an
     // empty list of extensions in this case.
     if (getPluginLinkExtensions === undefined) {
-      return [];
+      return {
+        links: [],
+        isLoading: false,
+      };
     }
+
     const { extensions } = getPluginLinkExtensions({
       extensionPointId,
       context,
-      limitPerPlugin: 3,
+      limitPerPlugin,
     });
 
-    return extensions;
+    return {
+      links: extensions,
+      isLoading: false,
+    };
   }, [context]);
 }
 
@@ -78,5 +92,5 @@ function useExtensionLinks<T>(context: T, extensionPointId: OnCallPluginExtensio
 // Other plugins should be able to use this context type in the `configure`
 // or `onClick` handler of their extension.
 interface PluginExtensionOnCallAlertGroupContext {
-  alertGroup: Alert;
+  alertGroup: ApiSchemas['AlertGroup'];
 }

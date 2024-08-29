@@ -1,7 +1,7 @@
 import { test, expect, Page, Locator } from '../fixtures';
 import { verifyThatAlertGroupIsRoutedCorrectlyButNotEscalated } from '../utils/alertGroup';
 import { EscalationStep, createEscalationChain } from '../utils/escalationChain';
-import { clickButton, generateRandomValue, selectDropdownValue } from '../utils/forms';
+import { generateRandomValue, selectDropdownValue } from '../utils/forms';
 import {
   assignEscalationChainToIntegration,
   createIntegration,
@@ -13,6 +13,8 @@ import { goToOnCallPage } from '../utils/navigation';
 type MaintenanceModeType = 'Debug' | 'Maintenance';
 
 test.describe('maintenance mode works', () => {
+  test.slow();
+
   const MAINTENANCE_DURATION = '1 hour';
   const REMAINING_TIME_TEXT = '59m left';
   const REMAINING_TIME_TOOLTIP_TEST_ID = 'maintenance-mode-remaining-time-tooltip';
@@ -24,7 +26,8 @@ test.describe('maintenance mode works', () => {
     await page.waitForTimeout(2000);
     const integrationSettingsPopupElement = page
       .getByTestId('integration-settings-context-menu-wrapper')
-      .getByRole('img');
+      .locator('svg');
+
     await integrationSettingsPopupElement.click();
     /**
      * sometimes we need to click twice (e.g. adding the escalation chain route
@@ -40,7 +43,7 @@ test.describe('maintenance mode works', () => {
   const enableMaintenanceMode = async (page: Page, mode: MaintenanceModeType): Promise<void> => {
     await _openIntegrationSettingsPopup(page, true);
     // open the maintenance mode settings drawer + fill in the maintenance details
-    await page.getByTestId('integration-start-maintenance').click();
+    await page.getByText('Start Maintenance').click();
 
     // fill in the form
     const maintenanceModeDrawer = page.getByTestId('maintenance-mode-drawer');
@@ -78,14 +81,10 @@ test.describe('maintenance mode works', () => {
     await _openIntegrationSettingsPopup(page, true);
 
     // click the stop maintenance button
-    await page.getByTestId('integration-stop-maintenance').click();
+    await page.getByText('Stop Maintenance').click();
 
     // in the modal popup, confirm that we want to stop it
-    await clickButton({
-      page,
-      buttonText: 'Stop',
-      startingLocator: page.getByRole('dialog'),
-    });
+    await page.locator('button >> text=Stop').click();
 
     await getRemainingTimeTooltip(page).waitFor({ state: 'hidden' });
   };
@@ -103,6 +102,7 @@ test.describe('maintenance mode works', () => {
 
     await createEscalationChain(page, escalationChainName, EscalationStep.NotifyUsers, userName);
     await createIntegration({ page, integrationName });
+    await page.waitForTimeout(1000);
     await assignEscalationChainToIntegration(page, escalationChainName);
     await enableMaintenanceMode(page, maintenanceModeType);
 
@@ -110,8 +110,6 @@ test.describe('maintenance mode works', () => {
   };
 
   test('debug mode', async ({ adminRolePage: { page, userName } }) => {
-    test.slow();
-
     const { escalationChainName, integrationName } = await createIntegrationAndEscalationChainAndEnableMaintenanceMode(
       page,
       userName,
@@ -128,7 +126,6 @@ test.describe('maintenance mode works', () => {
   });
 
   test('"maintenance" mode', async ({ adminRolePage: { page, userName } }) => {
-    test.slow();
     const { integrationName } = await createIntegrationAndEscalationChainAndEnableMaintenanceMode(
       page,
       userName,

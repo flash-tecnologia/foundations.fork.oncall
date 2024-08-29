@@ -2,7 +2,47 @@ import dayjs from 'dayjs';
 
 import { getColor, getOverrideColor } from 'models/schedule/schedule.helpers';
 import { Layer, Shift } from 'models/schedule/schedule.types';
-import { User } from 'models/user/user.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { toDateWithTimezoneOffset } from 'pages/schedule/Schedule.helpers';
+import { waitForElement } from 'utils/DOM';
+
+export const calculateScheduleFormOffset = async (queryClassName: string) => {
+  const modal = await waitForElement(queryClassName);
+  const modalHeight = modal.clientHeight;
+
+  return window.innerHeight / 2 - modalHeight / 2;
+};
+
+// DatePickers will convert the date passed to local timezone, instead we want to use the date in the given timezone
+export const toDatePickerDate = (value: dayjs.Dayjs, timezoneOffset: number) => {
+  const date = toDateWithTimezoneOffset(value, timezoneOffset);
+
+  return dayjs()
+    .set('hour', 0)
+    .set('minute', 0)
+    .set('second', 0)
+    .set('millisecond', 0)
+    .set('date', 1)
+    .set('month', date.month())
+    .set('date', date.date())
+    .set('year', date.year())
+    .toDate();
+};
+
+export const getCalendarStartDateInTimezone = (calendarStartDate: dayjs.Dayjs, utcOffset: number) => {
+  const offsetedDate = dayjs(calendarStartDate.toDate())
+    .utcOffset(utcOffset)
+    .set('date', 1)
+    .set('months', calendarStartDate.month())
+    .set('date', calendarStartDate.date())
+    .set('year', calendarStartDate.year())
+    .set('hours', 0)
+    .set('minutes', 0)
+    .set('second', 0)
+    .set('milliseconds', 0);
+
+  return offsetedDate;
+};
 
 export const findColor = (shiftId: Shift['id'], layers: Layer[], overrides?) => {
   let color = undefined;
@@ -41,7 +81,7 @@ export const findColor = (shiftId: Shift['id'], layers: Layer[], overrides?) => 
   return color;
 };
 
-export const findClosestUserEvent = (startMoment: dayjs.Dayjs, userPk: User['pk'], layers: Layer[]) => {
+export const findClosestUserEvent = (startMoment: dayjs.Dayjs, userPk: ApiSchemas['User']['pk'], layers: Layer[]) => {
   let minDiff;
   let closestEvent;
 

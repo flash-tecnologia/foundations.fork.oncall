@@ -1,37 +1,40 @@
 import React, { useCallback, useState, useEffect } from 'react';
 
-import { Button, HorizontalGroup, Drawer, VerticalGroup } from '@grafana/ui';
+import { Button, Drawer, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { debounce } from 'lodash-es';
 import { observer } from 'mobx-react';
 
-import { templateForEdit } from 'components/AlertTemplates/AlertTemplatesForm.config';
+import { getTemplatesForEdit } from 'components/AlertTemplates/AlertTemplatesForm.config';
 import { TemplateForEdit } from 'components/AlertTemplates/CommonAlertTemplatesForm.config';
-import CheatSheet from 'components/CheatSheet/CheatSheet';
+import { CheatSheet } from 'components/CheatSheet/CheatSheet';
 import {
   groupingTemplateCheatSheet,
   slackMessageTemplateCheatSheet,
   genericTemplateCheatSheet,
+  alertGroupDynamicLabelCheatSheet,
+  alertGroupMultiLabelExtractionCheatSheet,
 } from 'components/CheatSheet/CheatSheet.config';
-import MonacoEditor from 'components/MonacoEditor/MonacoEditor';
-import Text from 'components/Text/Text';
-import TemplateResult from 'containers/TemplateResult/TemplateResult';
-import TemplatesAlertGroupsList, { TEMPLATE_PAGE } from 'containers/TemplatesAlertGroupsList/TemplatesAlertGroupsList';
+import { MonacoEditor } from 'components/MonacoEditor/MonacoEditor';
+import { Text } from 'components/Text/Text';
+import { TemplatePage } from 'containers/TemplatePreview/TemplatePreview';
+import { TemplateResult } from 'containers/TemplateResult/TemplateResult';
+import { TemplatesAlertGroupsList } from 'containers/TemplatesAlertGroupsList/TemplatesAlertGroupsList';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
-import { AlertReceiveChannel } from 'models/alert_receive_channel/alert_receive_channel.types';
-import { AlertTemplatesDTO } from 'models/alert_templates';
-import { Alert } from 'models/alertgroup/alertgroup.types';
+import { AlertTemplatesDTO } from 'models/alert_templates/alert_templates';
 import { ChannelFilter } from 'models/channel_filter/channel_filter.types';
-import { TemplateOptions } from 'pages/integration/Integration.config';
-import LocationHelper from 'utils/LocationHelper';
-import { UserActions } from 'utils/authorization';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { IntegrationTemplateOptions, LabelTemplateOptions } from 'pages/integration/IntegrationCommon.config';
+import { useStore } from 'state/useStore';
+import { LocationHelper } from 'utils/LocationHelper';
+import { UserActions } from 'utils/authorization/authorization';
 
 import styles from './IntegrationTemplate.module.scss';
 
 const cx = cn.bind(styles);
 
 interface IntegrationTemplateProps {
-  id: AlertReceiveChannel['id'];
+  id: ApiSchemas['AlertReceiveChannel']['id'];
   channelFilterId?: ChannelFilter['id'];
   template: TemplateForEdit;
   templateBody: string;
@@ -41,17 +44,21 @@ interface IntegrationTemplateProps {
   onUpdateRoute?: (values: any, channelFilterId?: ChannelFilter['id']) => void;
 }
 
-const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
+export const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
   const { id, onHide, template, onUpdateTemplates, onUpdateRoute, templateBody, channelFilterId, templates } = props;
 
   const [isCheatSheetVisible, setIsCheatSheetVisible] = useState<boolean>(false);
   const [chatOpsPermalink, setChatOpsPermalink] = useState(undefined);
-  const [alertGroupPayload, setAlertGroupPayload] = useState<JSON>(undefined);
+  const [alertGroupPayload, setAlertGroupPayload] = useState<{ [key: string]: unknown }>(undefined);
   const [changedTemplateBody, setChangedTemplateBody] = useState<string>(templateBody);
   const [resultError, setResultError] = useState<string>(undefined);
   const [isRecentAlertGroupExisting, setIsRecentAlertGroupExisting] = useState<boolean>(false);
 
+  const store = useStore();
+
   useEffect(() => {
+    const templateForEdit = getTemplatesForEdit(store.features);
+
     if (templateForEdit[template.name]) {
       const locationParams: any = { template: template.name };
       if (template.isRoute) {
@@ -94,7 +101,7 @@ const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
     }
   };
 
-  const onSelectAlertGroup = useCallback((alertGroup: Alert) => {
+  const onSelectAlertGroup = useCallback((alertGroup: ApiSchemas['AlertGroup']) => {
     if (template.additionalData?.chatOpsName) {
       setChatOpsPermalink({
         permalink: alertGroup?.permalinks[template.additionalData?.chatOpsName],
@@ -124,26 +131,32 @@ const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
 
   const getCheatSheet = (templateKey: string) => {
     switch (templateKey) {
-      case TemplateOptions.Grouping.key:
-      case TemplateOptions.Resolve.key:
+      case IntegrationTemplateOptions.Grouping.key:
+      case IntegrationTemplateOptions.Resolve.key:
         return groupingTemplateCheatSheet;
-      case TemplateOptions.WebTitle.key:
-      case TemplateOptions.WebMessage.key:
-      case TemplateOptions.WebImage.key:
+      case IntegrationTemplateOptions.WebTitle.key:
+      case IntegrationTemplateOptions.WebMessage.key:
+      case IntegrationTemplateOptions.WebImage.key:
         return genericTemplateCheatSheet;
-      case TemplateOptions.Autoacknowledge.key:
-      case TemplateOptions.SourceLink.key:
-      case TemplateOptions.Phone.key:
-      case TemplateOptions.SMS.key:
-      case TemplateOptions.SlackTitle.key:
-      case TemplateOptions.SlackMessage.key:
-      case TemplateOptions.SlackImage.key:
-      case TemplateOptions.TelegramTitle.key:
-      case TemplateOptions.TelegramMessage.key:
-      case TemplateOptions.TelegramImage.key:
-      case TemplateOptions.EmailTitle.key:
-      case TemplateOptions.EmailMessage.key:
+      case IntegrationTemplateOptions.Autoacknowledge.key:
+      case IntegrationTemplateOptions.SourceLink.key:
+      case IntegrationTemplateOptions.Phone.key:
+      case IntegrationTemplateOptions.SMS.key:
+      case IntegrationTemplateOptions.SlackTitle.key:
+      case IntegrationTemplateOptions.SlackMessage.key:
+      case IntegrationTemplateOptions.SlackImage.key:
+      case IntegrationTemplateOptions.TelegramTitle.key:
+      case IntegrationTemplateOptions.TelegramMessage.key:
+      case IntegrationTemplateOptions.TelegramImage.key:
+      case IntegrationTemplateOptions.EmailTitle.key:
+      case IntegrationTemplateOptions.EmailMessage.key:
+      case IntegrationTemplateOptions.MobileAppTitle.key:
+      case IntegrationTemplateOptions.MobileAppMessage.key:
         return slackMessageTemplateCheatSheet;
+      case LabelTemplateOptions.AlertGroupDynamicLabel.key:
+        return alertGroupDynamicLabelCheatSheet;
+      case LabelTemplateOptions.AlertGroupMultiLabel.key:
+        return alertGroupMultiLabelExtractionCheatSheet;
       default:
         return genericTemplateCheatSheet;
     }
@@ -152,13 +165,13 @@ const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
     <Drawer
       title={
         <div className={cx('title-container')}>
-          <HorizontalGroup justify="space-between" align="flex-start">
-            <VerticalGroup>
+          <Stack justifyContent="space-between" alignItems="flex-start">
+            <Stack direction="column">
               <Text.Title level={3}>Edit {template.displayName} template</Text.Title>
               {template.description && <Text type="secondary">{template.description}</Text>}
-            </VerticalGroup>
+            </Stack>
 
-            <HorizontalGroup>
+            <Stack>
               <WithPermissionControlTooltip userAction={UserActions.IntegrationsWrite}>
                 <Button variant="secondary" onClick={onHide}>
                   Cancel
@@ -169,8 +182,8 @@ const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
                   Save
                 </Button>
               </WithPermissionControlTooltip>
-            </HorizontalGroup>
-          </HorizontalGroup>
+            </Stack>
+          </Stack>
         </div>
       }
       onClose={onHide}
@@ -180,7 +193,7 @@ const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
       <div className={cx('container-wrapper')}>
         <div className={cx('container')}>
           <TemplatesAlertGroupsList
-            templatePage={TEMPLATE_PAGE.Integrations}
+            templatePage={TemplatePage.Integrations}
             alertReceiveChannelId={id}
             onEditPayload={onEditPayload}
             onSelectAlertGroup={onSelectAlertGroup}
@@ -218,13 +231,13 @@ const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
       <>
         <div className={cx('template-block-codeeditor')}>
           <div className={cx('template-editor-block-title')}>
-            <HorizontalGroup justify="space-between" align="center" wrap>
+            <Stack justifyContent="space-between" alignItems="center" wrap="wrap">
               <Text>Template editor</Text>
 
               <Button variant="secondary" fill="outline" onClick={onShowCheatSheet} icon="book" size="sm">
                 Cheatsheet
               </Button>
-            </HorizontalGroup>
+            </Stack>
           </div>
           <div className={cx('template-editor-block-content')}>
             <MonacoEditor
@@ -240,5 +253,3 @@ const IntegrationTemplate = observer((props: IntegrationTemplateProps) => {
     );
   }
 });
-
-export default IntegrationTemplate;

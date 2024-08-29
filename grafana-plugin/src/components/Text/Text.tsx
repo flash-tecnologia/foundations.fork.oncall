@@ -1,12 +1,13 @@
 import React, { FC, HTMLAttributes, ChangeEvent, useState, useCallback } from 'react';
 
-import { IconButton, Modal, Input, HorizontalGroup, Button, VerticalGroup } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { cx } from '@emotion/css';
+import { IconButton, Modal, Input, Stack, Button, useStyles2 } from '@grafana/ui';
 import CopyToClipboard from 'react-copy-to-clipboard';
+import { bem } from 'styles/utils.styles';
 
-import { openNotification } from 'utils';
+import { openNotification } from 'utils/utils';
 
-import styles from './Text.module.scss';
+import { getTextStyles } from './Text.styles';
 
 export type TextType = 'primary' | 'secondary' | 'disabled' | 'link' | 'success' | 'warning' | 'danger';
 
@@ -15,7 +16,7 @@ interface TextProps extends HTMLAttributes<HTMLElement> {
   strong?: boolean;
   underline?: boolean;
   size?: 'xs' | 'small' | 'medium' | 'large';
-  keyboard?: boolean;
+  display?: 'inline' | 'block' | 'inline-block';
   className?: string;
   wrap?: boolean;
   copyable?: boolean;
@@ -26,25 +27,21 @@ interface TextProps extends HTMLAttributes<HTMLElement> {
   editModalTitle?: string;
   maxWidth?: string;
   clickable?: boolean;
-}
-
-interface TextInterface extends React.FC<TextProps> {
-  Title: React.FC<TitleProps>;
+  customTag?: 'h6' | 'span';
+  withBackground?: boolean;
 }
 
 const PLACEHOLDER = '**********';
 
-const cx = cn.bind(styles);
-
-const Text: TextInterface = (props) => {
+export const Text: React.FC<TextProps> & { Title: typeof Title } = (props) => {
   const {
     type,
     size = 'medium',
+    display = 'inline',
     strong = false,
     underline = false,
     children,
     onClick,
-    keyboard = false,
     className,
     wrap = true,
     copyable = false,
@@ -53,11 +50,15 @@ const Text: TextInterface = (props) => {
     clearBeforeEdit = false,
     hidden = false,
     editModalTitle = 'New value',
+    withBackground = false,
     style,
     maxWidth,
     clickable,
+    customTag,
     ...rest
   } = props;
+
+  const styles = useStyles2(getTextStyles);
 
   const [isEditMode, setIsEditMode] = useState<boolean>(false);
   const [value, setValue] = useState<string | undefined>();
@@ -81,22 +82,23 @@ const Text: TextInterface = (props) => {
     setValue(e.target.value);
   }, []);
 
+  const CustomTag = (customTag || `span`) as unknown as React.ComponentType<any>;
+
   return (
-    <span
+    <CustomTag
       onClick={onClick}
       className={cx(
-        'root',
-        'text',
-        {
-          'with-maxWidth': Boolean(maxWidth),
-          [`text--${type}`]: true,
-          [`text--${size}`]: true,
-          'text--strong': strong,
-          'text--underline': underline,
-          'text--clickable': clickable,
-          'no-wrap': !wrap,
-          keyboard,
-        },
+        styles.root,
+        styles.text,
+        { [styles.maxWidth]: Boolean(maxWidth) },
+        bem(styles.text, type),
+        bem(styles.text, size),
+        bem(styles.display, display),
+        { [bem(styles.text, `strong`)]: strong },
+        { [bem(styles.text, `underline`)]: underline },
+        { [bem(styles.text, 'clickable')]: clickable },
+        { [styles.noWrap]: !wrap },
+        { [styles.withBackground]: withBackground },
         className
       )}
       style={{ ...style, maxWidth }}
@@ -106,9 +108,10 @@ const Text: TextInterface = (props) => {
       {editable && (
         <IconButton
           onClick={handleEditClick}
-          className={cx('icon-button')}
+          className={styles.iconButton}
           tooltip="Edit"
           tooltipPlacement="top"
+          data-emotion="iconButton"
           name="pen"
         />
       )}
@@ -121,16 +124,17 @@ const Text: TextInterface = (props) => {
         >
           <IconButton
             variant="primary"
-            className={cx('icon-button')}
+            className={styles.iconButton}
             tooltip="Copy to clipboard"
             tooltipPlacement="top"
+            data-emotion="iconButton"
             name="copy"
           />
         </CopyToClipboard>
       )}
       {isEditMode && (
         <Modal onDismiss={handleCancelEdit} closeOnEscape isOpen title={editModalTitle}>
-          <VerticalGroup>
+          <Stack direction="column">
             <Input
               autoFocus
               ref={(node) => {
@@ -141,18 +145,18 @@ const Text: TextInterface = (props) => {
               value={value}
               onChange={handleInputChange}
             />
-            <HorizontalGroup justify="flex-end">
+            <Stack justifyContent="flex-end">
               <Button variant="secondary" onClick={handleCancelEdit}>
                 Cancel
               </Button>
               <Button variant="primary" onClick={handleConfirmEdit}>
                 Ok
               </Button>
-            </HorizontalGroup>
-          </VerticalGroup>
+            </Stack>
+          </Stack>
         </Modal>
       )}
-    </span>
+    </CustomTag>
   );
 };
 
@@ -161,17 +165,17 @@ interface TitleProps extends TextProps {
 }
 
 const Title: FC<TitleProps> = (props) => {
+  const styles = useStyles2(getTextStyles);
+
   const { level, className, style, ...restProps } = props;
   // @ts-ignore
   const Tag: keyof JSX.IntrinsicElements = `h${level}`;
 
   return (
-    <Tag className={cx('title', className)} style={style}>
+    <Tag className={cx(styles.title, className)} style={style}>
       <Text {...restProps} />
     </Tag>
   );
 };
 
 Text.Title = Title;
-
-export default Text;

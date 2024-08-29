@@ -1,11 +1,10 @@
 import React, { ReactElement, useMemo } from 'react';
 
-// Note: `PluginExtensionLink` is available in Grafana>=10.0.
-// @ts-expect-error
-import { locationUtil, PluginExtensionLink } from '@grafana/data';
-import { Menu } from '@grafana/ui';
+import { locationUtil, PluginExtensionLink, PluginExtensionTypes } from '@grafana/data';
+import { IconName, Menu } from '@grafana/ui';
 
 import { PluginBridge, SupportedPlugin } from 'components/PluginBridge/PluginBridge';
+import { getPluginId } from 'utils/consts';
 import { truncateTitle } from 'utils/string';
 
 type Props = {
@@ -48,6 +47,7 @@ function DeclareIncidentMenuItem({ extensions, declareIncidentLink, grafanaIncid
   const declareIncidentExtensionLink = extensions.find(
     (extension) => extension.pluginId === 'grafana-incident-app' && extension.title === 'Declare incident'
   );
+
   if (
     // Don't show a custom Declare incident button if the Grafana Incident plugin already configured one.
     declareIncidentExtensionLink ||
@@ -58,29 +58,30 @@ function DeclareIncidentMenuItem({ extensions, declareIncidentLink, grafanaIncid
   ) {
     return null;
   }
+
   return (
     <PluginBridge plugin={SupportedPlugin.Incident}>
       <Menu.Group key={'Declare incident'} label={'Incident'}>
         {renderItems([
           {
-            type: 'link',
+            type: PluginExtensionTypes.link,
             path: declareIncidentLink,
             icon: 'fire',
             category: 'Incident',
             title: 'Declare incident',
-            pluginId: 'grafana-oncall-app',
-          },
+            pluginId: getPluginId(),
+          } as Partial<PluginExtensionLink>,
         ])}
       </Menu.Group>
     </PluginBridge>
   );
 }
 
-function renderItems(extensions: PluginExtensionLink[]): JSX.Element[] {
+function renderItems(extensions: Array<Partial<PluginExtensionLink>>): ReactElement[] {
   return extensions.map((extension) => (
     <Menu.Item
       ariaLabel={extension.title}
-      icon={extension?.icon || 'plug'}
+      icon={(extension?.icon || 'plug') as IconName}
       key={extension.id}
       label={truncateTitle(extension.title, 25)}
       onClick={(event) => {

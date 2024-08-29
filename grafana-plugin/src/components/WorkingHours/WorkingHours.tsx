@@ -1,27 +1,22 @@
 import React, { FC, useMemo } from 'react';
 
-import cn from 'classnames/bind';
 import dayjs from 'dayjs';
 
 import { Timezone } from 'models/timezone/timezone.types';
 
-import { default_working_hours } from './WorkingHours.config';
+import { DefaultWorkingHours, default_working_hours } from './WorkingHours.config';
 import { getNonWorkingMoments, getWorkingMoments } from './WorkingHours.helpers';
-
-import styles from './WorkingHours.module.css';
 
 interface WorkingHoursProps {
   timezone: Timezone;
-  workingHours: any;
+  workingHours: DefaultWorkingHours;
   startMoment: dayjs.Dayjs;
   duration: number; // in seconds
   className: string;
   light?: boolean;
 }
 
-const cx = cn.bind(styles);
-
-const WorkingHours: FC<WorkingHoursProps> = (props) => {
+export const WorkingHours: FC<WorkingHoursProps> = (props) => {
   const { timezone, workingHours = default_working_hours, startMoment, duration, className, light } = props;
 
   const endMoment = startMoment.add(duration, 'seconds');
@@ -50,11 +45,10 @@ const WorkingHours: FC<WorkingHoursProps> = (props) => {
           const diff = moment.end.diff(moment.start, 'seconds');
           return (
             <rect
-              className={cx('stripes')}
               key={index}
-              x={`${(start * 100) / duration}%`}
+              x={`${duration > 0 ? (start * 100) / duration : 0}%`} // x/0 is NaN
               y={0}
-              width={`${(diff * 100) / duration}%`}
+              width={`${duration > 0 ? (diff * 100) / duration : 0}%`} // x/0 is NaN
               height="100%"
               fill={light ? 'url(#stripes_light)' : 'url(#stripes)'}
             />
@@ -63,5 +57,3 @@ const WorkingHours: FC<WorkingHoursProps> = (props) => {
     </svg>
   );
 };
-
-export default WorkingHours;

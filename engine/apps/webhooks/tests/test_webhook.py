@@ -1,16 +1,12 @@
 from unittest.mock import call, patch
 
+import httpretty
 import pytest
+from django.conf import settings
 from requests.auth import HTTPBasicAuth
 
 from apps.webhooks.models import Webhook
-from apps.webhooks.utils import (
-    OUTGOING_WEBHOOK_TIMEOUT,
-    InvalidWebhookData,
-    InvalidWebhookHeaders,
-    InvalidWebhookTrigger,
-    InvalidWebhookUrl,
-)
+from apps.webhooks.utils import InvalidWebhookData, InvalidWebhookHeaders, InvalidWebhookTrigger, InvalidWebhookUrl
 
 
 @pytest.mark.django_db
@@ -106,7 +102,7 @@ def test_build_request_kwargs_custom_data(make_organization, make_custom_webhook
     webhook = make_custom_webhook(organization=organization, data="{{foo}}", forward_all=False)
     request_kwargs = webhook.build_request_kwargs({"foo": "bar", "something": "else"})
 
-    assert request_kwargs == {"headers": {}, "data": "bar"}
+    assert request_kwargs == {"headers": {}, "data": "bar".encode("utf-8")}
 
 
 @pytest.mark.django_db
@@ -121,7 +117,7 @@ def test_build_request_kwargs_is_legacy_custom_data(make_organization, make_cust
     event_data = {"alert_group_id": "bar", "alert_payload": {"message": "the-message"}}
     request_kwargs = webhook.build_request_kwargs(event_data)
 
-    assert request_kwargs == {"headers": {}, "data": "the-message"}
+    assert request_kwargs == {"headers": {}, "data": "the-message".encode("utf-8")}
 
 
 @pytest.mark.django_db
@@ -172,6 +168,9 @@ def test_build_url_invalid_url(make_organization, make_custom_webhook):
 
 @pytest.mark.django_db
 def test_build_url_private_raises(make_organization, make_custom_webhook):
+    if settings.DANGEROUS_WEBHOOKS_ENABLED:
+        pytest.skip("Dangerous webhooks are enabled")
+
     organization = make_organization()
     webhook = make_custom_webhook(organization=organization, url="{{foo}}")
 
@@ -230,18 +229,33 @@ def test_check_trigger_template_ok(make_organization, make_custom_webhook):
 def test_make_request(make_organization, make_custom_webhook):
     organization = make_organization()
 
-    with patch("apps.webhooks.models.webhook.requests") as mock_requests:
-        for method in ("GET", "POST", "PUT", "DELETE", "OPTIONS"):
+    with patch("apps.webhooks.models.webhook.WebhookSession.request") as mock_request:
+        for method in ("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"):
             webhook = make_custom_webhook(organization=organization, http_method=method)
             webhook.make_request("url", {"foo": "bar"})
-            expected_call = getattr(mock_requests, method.lower())
-            assert expected_call.called
-            assert expected_call.call_args == call("url", timeout=OUTGOING_WEBHOOK_TIMEOUT, foo="bar")
+            assert mock_request.call_args == call(method, "url", timeout=settings.OUTGOING_WEBHOOK_TIMEOUT, foo="bar")
 
     # invalid
     webhook = make_custom_webhook(organization=organization, http_method="NOT")
     with pytest.raises(ValueError):
         webhook.make_request("url", {"foo": "bar"})
+
+
+@httpretty.activate(verbose=True, allow_net_connect=False)
+@pytest.mark.django_db
+def test_make_request_bad_redirect(make_organization, make_custom_webhook):
+    if settings.DANGEROUS_WEBHOOKS_ENABLED:
+        pytest.skip("Dangerous webhooks are enabled")
+
+    organization = make_organization()
+    webhook = make_custom_webhook(organization=organization, http_method="POST")
+
+    url = "http://example.com"
+    response = httpretty.Response(body="Redirect", status=302, location="127.0.0.1")
+    httpretty.register_uri(httpretty.POST, url, responses=[response])
+
+    with pytest.raises(InvalidWebhookUrl):
+        webhook.make_request(url, {})
 
 
 @pytest.mark.django_db
@@ -278,3 +292,100 @@ def test_escaping_payload_with_single_quote_in_string(make_organization, make_cu
     }
     request_kwargs = webhook.build_request_kwargs(payload)
     assert request_kwargs == {"headers": {}, "json": {"data": "{'text': \"Hi, it's alert\"}"}}
+
+
+@pytest.mark.parametrize(
+    "data,expected_kwargs",
+    [
+        (
+            '{"data" : "{{ alert_payload.text }}"}',
+            {"json": {"data": "東京"}},
+        ),
+        (
+            "😊",
+            {"data": "😊".encode("utf-8")},
+        ),
+    ],
+)
+@pytest.mark.django_db
+def test_escaping_unicode_in_string(make_organization, make_custom_webhook, data, expected_kwargs):
+    organization = make_organization()
+    webhook = make_custom_webhook(
+        organization=organization,
+        data=data,
+        forward_all=False,
+    )
+
+    payload = {
+        "alert_payload": {
+            "text": "東京",
+        }
+    }
+    request_kwargs = webhook.build_request_kwargs(payload)
+    assert request_kwargs == {"headers": {}, **expected_kwargs}
+
+
+@pytest.mark.django_db
+def test_webhook_not_deleted_with_team(make_organization, make_team, make_custom_webhook):
+    organization = make_organization()
+    team = make_team(organization=organization)
+    webhook = make_custom_webhook(
+        organization=organization,
+        team=team,
+    )
+    assert webhook.team == team
+    webhook_pk = webhook.pk
+    team.delete()
+
+    webhook = Webhook.objects.get(pk=webhook_pk)
+    assert webhook.team is None
+
+
+@pytest.mark.django_db
+def test_delete_alert_receive_channel_webhooks_deleted(
+    make_organization, make_alert_receive_channel, make_custom_webhook
+):
+    organization = make_organization()
+    channel = make_alert_receive_channel(organization=organization, additional_settings={})
+
+    webhook_from_connected_integration = make_custom_webhook(
+        organization=organization,
+        is_from_connected_integration=True,
+    )
+    other_webhook = make_custom_webhook(organization=organization)
+    webhook_from_connected_integration.filtered_integrations.add(channel)
+    other_webhook.filtered_integrations.add(channel)
+
+    channel.delete()
+
+    webhook_from_connected_integration.refresh_from_db()
+    assert webhook_from_connected_integration.deleted_at is not None
+
+    other_webhook.refresh_from_db()
+    assert other_webhook.deleted_at is None
+
+
+@pytest.mark.django_db
+def test_get_source_alert_receive_channel(make_organization, make_alert_receive_channel, make_custom_webhook):
+    organization = make_organization()
+    channel1 = make_alert_receive_channel(organization=organization, additional_settings={})
+    channel2 = make_alert_receive_channel(organization=organization, additional_settings={})
+
+    w1 = make_custom_webhook(
+        organization=organization,
+        is_from_connected_integration=True,
+    )
+    # source integration is the first added channel
+    w1.filtered_integrations.add(channel2)
+    w1.filtered_integrations.add(channel1)
+
+    w2 = make_custom_webhook(
+        organization=organization,
+        is_from_connected_integration=True,
+    )
+    # source integration is the first added channel
+    w2.filtered_integrations.add(channel1)
+    w2.filtered_integrations.add(channel2)
+
+    assert w1.get_source_alert_receive_channel() == channel2
+    assert w2.get_source_alert_receive_channel() == channel1

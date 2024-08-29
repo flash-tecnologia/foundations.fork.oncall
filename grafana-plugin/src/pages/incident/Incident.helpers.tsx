@@ -1,67 +1,28 @@
 import React from 'react';
 
-import { Button, HorizontalGroup, IconButton, Tooltip, VerticalGroup } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { css, cx } from '@emotion/css';
+import { Button, IconButton, Tooltip, Stack, useStyles2 } from '@grafana/ui';
+import { getUtilStyles } from 'styles/utils.styles';
 
-import Avatar from 'components/Avatar/Avatar';
-import PluginLink from 'components/PluginLink/PluginLink';
-import Tag from 'components/Tag/Tag';
-import Text from 'components/Text/Text';
-import TextEllipsisTooltip from 'components/TextEllipsisTooltip/TextEllipsisTooltip';
+import { Avatar } from 'components/Avatar/Avatar';
+import { PluginLink } from 'components/PluginLink/PluginLink';
+import { Text } from 'components/Text/Text';
+import { TextEllipsisTooltip } from 'components/TextEllipsisTooltip/TextEllipsisTooltip';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
-import { Alert as AlertType, Alert, IncidentStatus } from 'models/alertgroup/alertgroup.types';
-import { User } from 'models/user/user.types';
-import { SilenceButtonCascader } from 'pages/incidents/parts/SilenceButtonCascader';
+import { IncidentStatus } from 'models/alertgroup/alertgroup.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { SilenceSelect } from 'pages/incidents/parts/SilenceSelect';
 import { move } from 'state/helpers';
-import { getVar } from 'utils/DOM';
-import { UserActions } from 'utils/authorization';
-import { TEXT_ELLIPSIS_CLASS } from 'utils/consts';
+import { UserActions } from 'utils/authorization/authorization';
+import { StackSize } from 'utils/consts';
 
-import styles from './Incident.module.scss';
+export const IncidentRelatedUsers = (props: { incident: ApiSchemas['AlertGroup']; isFull: boolean }) => {
+  const { incident, isFull } = props;
 
-const cx = cn.bind(styles);
-
-export function getIncidentStatusTag(alert: Alert) {
-  switch (alert.status) {
-    case IncidentStatus.Firing:
-      return (
-        <Tag color={getVar('--tag-danger')} className={cx('status-tag')}>
-          <Text strong size="small">
-            Firing
-          </Text>
-        </Tag>
-      );
-    case IncidentStatus.Acknowledged:
-      return (
-        <Tag color={getVar('--tag-warning')} className={cx('status-tag')}>
-          <Text strong size="small">
-            Acknowledged
-          </Text>
-        </Tag>
-      );
-    case IncidentStatus.Resolved:
-      return (
-        <Tag color={getVar('--tag-primary')} className={cx('status-tag')}>
-          <Text strong size="small">
-            Resolved
-          </Text>
-        </Tag>
-      );
-    case IncidentStatus.Silenced:
-      return (
-        <Tag color={getVar('--tag-secondary')} className={cx('status-tag')}>
-          <Text strong size="small">
-            Silenced
-          </Text>
-        </Tag>
-      );
-    default:
-      return null;
-  }
-}
-
-export function renderRelatedUsers(incident: Alert, isFull = false) {
   const { related_users } = incident;
+
+  const styles = useStyles2(getStyles);
+  const utilStyles = useStyles2(getUtilStyles);
 
   let users = [...related_users];
 
@@ -69,7 +30,7 @@ export function renderRelatedUsers(incident: Alert, isFull = false) {
     return <Text type="secondary">No users involved</Text>;
   }
 
-  function renderUser(user: User) {
+  function renderUser(user: Partial<ApiSchemas['User']>) {
     let badge = undefined;
     if (incident.resolved_by_user && user.pk === incident.resolved_by_user.pk) {
       badge = <IconButton tooltipPlacement="top" tooltip="Resolved" name="check-circle" style={{ color: '#52c41a' }} />;
@@ -80,10 +41,10 @@ export function renderRelatedUsers(incident: Alert, isFull = false) {
     return (
       <PluginLink key={user.pk} query={{ page: 'users', id: user.pk }} wrap={false}>
         <TextEllipsisTooltip placement="top" content={user.username}>
-          <Text type="secondary" className={cx(TEXT_ELLIPSIS_CLASS)}>
+          <Text type="secondary" className={utilStyles.overflowChild}>
             <Avatar size="small" src={user.avatar} />{' '}
-            <span className={cx('break-word', 'u-margin-right-xs')}>{user.username}</span>
-            <span className={cx('user-badge')}>{badge}</span>
+            <span className={cx(utilStyles.wordBreakAll, 'u-margin-right-xs')}>{user.username}</span>
+            <span className={styles.userBadge}>{badge}</span>
           </Text>
         </TextEllipsisTooltip>
       </PluginLink>
@@ -108,16 +69,20 @@ export function renderRelatedUsers(incident: Alert, isFull = false) {
   const otherUsers = isFull ? [] : users.slice(2);
 
   if (isFull) {
-    return visibleUsers.map((user, index) => (
+    return (
       <>
-        {index ? ', ' : ''}
-        {renderUser(user)}
+        {visibleUsers.map((user, index) => (
+          <>
+            {index ? ', ' : ''}
+            {renderUser(user)}
+          </>
+        ))}
       </>
-    ));
+    );
   }
 
   return (
-    <VerticalGroup spacing="xs">
+    <Stack direction="column" gap={StackSize.xs}>
       {visibleUsers.map(renderUser)}
       {Boolean(otherUsers.length) && (
         <Tooltip
@@ -140,20 +105,24 @@ export function renderRelatedUsers(incident: Alert, isFull = false) {
           </span>
         </Tooltip>
       )}
-    </VerticalGroup>
+    </Stack>
   );
-}
+};
 
-export function getActionButtons(incident: AlertType, cx: any, callbacks: { [key: string]: any }) {
-  if (incident.root_alert_group) {
+export function getActionButtons(
+  incident: ApiSchemas['AlertGroup'],
+  callbacks: { [key: string]: any },
+  allSecondary = false
+) {
+  const { onResolve, onUnresolve, onAcknowledge, onUnacknowledge, onSilence, onUnsilence } = callbacks;
+
+  if (incident?.root_alert_group) {
     return null;
   }
 
-  const { onResolve, onUnresolve, onAcknowledge, onUnacknowledge, onSilence, onUnsilence } = callbacks;
-
   const resolveButton = (
     <WithPermissionControlTooltip key="resolve" userAction={UserActions.AlertGroupsWrite}>
-      <Button disabled={incident.loading} onClick={onResolve} variant="primary">
+      <Button disabled={incident?.loading} onClick={onResolve} variant={allSecondary ? 'secondary' : 'primary'}>
         Resolve
       </Button>
     </WithPermissionControlTooltip>
@@ -161,15 +130,15 @@ export function getActionButtons(incident: AlertType, cx: any, callbacks: { [key
 
   const unacknowledgeButton = (
     <WithPermissionControlTooltip key="unacknowledge" userAction={UserActions.AlertGroupsWrite}>
-      <Button disabled={incident.loading} onClick={onUnacknowledge} variant="secondary">
+      <Button disabled={incident?.loading} onClick={onUnacknowledge} variant="secondary">
         Unacknowledge
       </Button>
     </WithPermissionControlTooltip>
   );
 
   const unresolveButton = (
-    <WithPermissionControlTooltip key="unacknowledge" userAction={UserActions.AlertGroupsWrite}>
-      <Button disabled={incident.loading} onClick={onUnresolve} variant="primary">
+    <WithPermissionControlTooltip key="unresolve" userAction={UserActions.AlertGroupsWrite}>
+      <Button disabled={incident?.loading} onClick={onUnresolve} variant={allSecondary ? 'secondary' : 'primary'}>
         Unresolve
       </Button>
     </WithPermissionControlTooltip>
@@ -177,31 +146,37 @@ export function getActionButtons(incident: AlertType, cx: any, callbacks: { [key
 
   const acknowledgeButton = (
     <WithPermissionControlTooltip key="acknowledge" userAction={UserActions.AlertGroupsWrite}>
-      <Button disabled={incident.loading} onClick={onAcknowledge} variant="secondary">
+      <Button disabled={incident?.loading} onClick={onAcknowledge} variant="secondary">
         Acknowledge
       </Button>
     </WithPermissionControlTooltip>
   );
 
+  const silenceButton = (
+    <WithPermissionControlTooltip key="silence" userAction={UserActions.AlertGroupsWrite}>
+      <SilenceSelect disabled={incident?.loading} onSelect={onSilence} />
+    </WithPermissionControlTooltip>
+  );
+
+  const unsilenceButton = (
+    <WithPermissionControlTooltip key="unsilence" userAction={UserActions.AlertGroupsWrite}>
+      <Button disabled={incident?.loading} variant="secondary" onClick={onUnsilence}>
+        Unsilence
+      </Button>
+    </WithPermissionControlTooltip>
+  );
+
+  if (incident?.status === undefined) {
+    // to render all buttons if status unknown
+    return [acknowledgeButton, unacknowledgeButton, resolveButton, unresolveButton, silenceButton, unsilenceButton];
+  }
+
   const buttons = [];
 
   if (incident.status === IncidentStatus.Silenced) {
-    buttons.push(
-      <WithPermissionControlTooltip key="silence" userAction={UserActions.AlertGroupsWrite}>
-        <Button disabled={incident.loading} variant="secondary" onClick={onUnsilence}>
-          Unsilence
-        </Button>
-      </WithPermissionControlTooltip>
-    );
+    buttons.push(unsilenceButton);
   } else if (incident.status !== IncidentStatus.Resolved) {
-    buttons.push(
-      <SilenceButtonCascader
-        className={cx('silence-button-inline')}
-        key="silence"
-        disabled={incident.loading}
-        onSelect={onSilence}
-      />
-    );
+    buttons.push(silenceButton);
   }
 
   if (!incident.resolved && !incident.acknowledged) {
@@ -212,5 +187,13 @@ export function getActionButtons(incident: AlertType, cx: any, callbacks: { [key
     buttons.push(unresolveButton);
   }
 
-  return <HorizontalGroup justify="flex-end">{buttons}</HorizontalGroup>;
+  return <Stack justifyContent="flex-end">{buttons}</Stack>;
 }
+
+const getStyles = () => {
+  return {
+    userBadge: css`
+      vertical-align: middle;
+    `,
+  };
+};

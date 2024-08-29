@@ -1,18 +1,21 @@
 import React from 'react';
 
 import { AppRootProps } from '@grafana/data';
-import { Alert, HorizontalGroup, Icon } from '@grafana/ui';
+import { Alert, Icon, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 
-import VerticalTabsBar, { VerticalTab } from 'components/VerticalTabsBar/VerticalTabsBar';
-import SlackSettings from 'pages/settings/tabs/ChatOps/tabs/SlackSettings/SlackSettings';
+import { VerticalTabsBar, VerticalTab } from 'components/VerticalTabsBar/VerticalTabsBar';
+import MSTeamsSettings from 'pages/settings/tabs/ChatOps/tabs/MSTeamsSettings/MSTeamsSettings';
+import { SlackSettings } from 'pages/settings/tabs/ChatOps/tabs/SlackSettings/SlackSettings';
 import TelegramSettings from 'pages/settings/tabs/ChatOps/tabs/TelegramSettings/TelegramSettings';
 import { AppFeature } from 'state/features';
 import { WithStoreProps } from 'state/types';
 import { useStore } from 'state/useStore';
 import { withMobXProviderContext } from 'state/withStore';
-import LocationHelper from 'utils/LocationHelper';
+import { LocationHelper } from 'utils/LocationHelper';
+
+import { handleChatOpsQueryParamError } from './ChatOps.helpers';
 
 import styles from './ChatOps.module.css';
 
@@ -21,6 +24,7 @@ const cx = cn.bind(styles);
 export enum ChatOpsTab {
   Slack = 'Slack',
   Telegram = 'Telegram',
+  MSTeams = 'MSTeams',
 }
 interface ChatOpsProps extends AppRootProps, WithStoreProps {}
 interface ChatOpsState {
@@ -28,15 +32,16 @@ interface ChatOpsState {
 }
 
 @observer
-class ChatOpsPage extends React.Component<ChatOpsProps, ChatOpsState> {
+export class _ChatOpsPage extends React.Component<ChatOpsProps, ChatOpsState> {
   state: ChatOpsState = {
     activeTab: ChatOpsTab.Slack,
   };
 
   componentDidMount() {
-    const { query } = this.props;
+    const tab = LocationHelper.getQueryParam('chatOpsTab');
 
-    this.handleChatopsTabChange(query?.tab || ChatOpsTab.Slack);
+    handleChatOpsQueryParamError();
+    this.handleChatopsTabChange(tab || ChatOpsTab.Slack);
   }
 
   componentWillUnmount() {
@@ -47,7 +52,7 @@ class ChatOpsPage extends React.Component<ChatOpsProps, ChatOpsState> {
     const { activeTab } = this.state;
     const { store } = this.props;
 
-    if (!this.isChatOpsConfigured() && store.isOpenSource()) {
+    if (!this.isChatOpsConfigured() && store.isOpenSource) {
       return this.renderNoChatOpsBannerInfo();
     }
 
@@ -83,16 +88,20 @@ class ChatOpsPage extends React.Component<ChatOpsProps, ChatOpsState> {
 
   isChatOpsConfigured(): boolean {
     const { store } = this.props;
-    return store.hasFeature(AppFeature.Slack) || store.hasFeature(AppFeature.Telegram);
+    return (
+      store.hasFeature(AppFeature.Slack) ||
+      store.hasFeature(AppFeature.Telegram) ||
+      store.hasFeature(AppFeature.MsTeams)
+    );
   }
 
   handleChatopsTabChange(tab: ChatOpsTab) {
     this.setState({ activeTab: tab });
-    LocationHelper.update({ tab: tab }, 'partial');
+    LocationHelper.update({ chatOpsTab: tab }, 'partial');
   }
 }
 
-export default withMobXProviderContext(ChatOpsPage);
+export const ChatOpsPage = withMobXProviderContext(_ChatOpsPage);
 
 interface TabsProps {
   activeTab: string;
@@ -107,19 +116,27 @@ const Tabs = (props: TabsProps) => {
     <VerticalTabsBar activeTab={activeTab} onChange={onTabChange}>
       {store.hasFeature(AppFeature.Slack) && (
         <VerticalTab id={ChatOpsTab.Slack}>
-          <HorizontalGroup>
+          <Stack>
             <Icon name="slack" />
             Slack
-          </HorizontalGroup>
+          </Stack>
         </VerticalTab>
       )}
 
       {store.hasFeature(AppFeature.Telegram) && (
         <VerticalTab id={ChatOpsTab.Telegram}>
-          <HorizontalGroup>
+          <Stack>
             <Icon name="message" />
             Telegram
-          </HorizontalGroup>
+          </Stack>
+        </VerticalTab>
+      )}
+      {store.hasFeature(AppFeature.MsTeams) && (
+        <VerticalTab id={ChatOpsTab.MSTeams}>
+          <Stack>
+            <Icon name="microsoft" />
+            Microsoft Teams
+          </Stack>
         </VerticalTab>
       )}
     </VerticalTabsBar>
@@ -144,6 +161,11 @@ const TabsContent = (props: TabsContentProps) => {
       {store.hasFeature(AppFeature.Telegram) && activeTab === ChatOpsTab.Telegram && (
         <div className={cx('messenger-settings')}>
           <TelegramSettings />
+        </div>
+      )}
+      {store.hasFeature(AppFeature.MsTeams) && activeTab === ChatOpsTab.MSTeams && (
+        <div className={cx('messenger-settings')}>
+          <MSTeamsSettings />
         </div>
       )}
     </>

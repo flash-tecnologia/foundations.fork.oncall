@@ -13,10 +13,15 @@ yarn-error.log*
 
 # This file is generated
 grafana-plugin.yml
-frontend_enterprise
 
 # playwright
-/test-results/
-/playwright-report/
+/playwright-report*
 /playwright/.cache/
 /e2e-tests/storageState.json
+
+# Jest test report
+jest_html_reporters.html
+jest-html-reporters*
+
+.turbo
+tsconfig.tsbuildinfo

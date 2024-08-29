@@ -1,10 +1,18 @@
 ---
 canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/routes/
 title: Routes HTTP API
-weight: 1100
+weight: 0
+refs:
+  pagination:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/oncall-api-reference/#pagination
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/#pagination
 ---
 
-# Create a route
+# Routes HTTP API
+
+## Create a route
 
 ```shell
 curl "{{API_URL}}/api/v1/routes/" \
@@ -57,7 +65,7 @@ Routes allow you to direct different alerts to different messenger channels and 
 
 `POST {{API_URL}}/api/v1/routes/`
 
-# Get a route
+## Get a route
 
 ```shell
 curl "{{API_URL}}/api/v1/routes/RIYGUJXCPFHXY/" \
@@ -86,7 +94,7 @@ The above command returns JSON structured in the following way:
 
 `GET {{API_URL}}/api/v1/routes/<ROUTE_ID>/`
 
-# List routes
+## List routes
 
 ```shell
 curl "{{API_URL}}/api/v1/routes/" \
@@ -132,6 +140,8 @@ The above command returns JSON structured in the following way:
 }
 ```
 
+> **Note**: The response is [paginated](ref:pagination). You may need to make multiple requests to get all records.
+
 The following available filter parameters should be provided as `GET` arguments:
 
 - `integration_id`
@@ -141,7 +151,7 @@ The following available filter parameters should be provided as `GET` arguments:
 
 `GET {{API_URL}}/api/v1/routes/`
 
-# Update route
+## Update route
 
 ```shell
 curl "{{API_URL}}/api/v1/routes/RIYGUJXCPFHXY/" \
@@ -177,7 +187,7 @@ The above command returns JSON structured in the following way:
 
 `PUT {{API_URL}}/api/v1/routes/<ROUTE_ID>/`
 
-# Delete a route
+## Delete a route
 
 ```shell
 curl "{{API_URL}}/api/v1/routes/RIYGUJXCPFHXY/" \

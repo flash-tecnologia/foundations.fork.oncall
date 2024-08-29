@@ -1,12 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { HorizontalGroup, TimeOfDayPicker } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { css, cx } from '@emotion/css';
+import { Stack, TimeOfDayPicker, useStyles2 } from '@grafana/ui';
 import moment from 'moment-timezone';
-
-import styles from './TimeRange.module.css';
-
-const cx = cn.bind(styles);
 
 interface TimeRangeProps {
   className: string;
@@ -45,7 +41,7 @@ function getRangeStrings(from: moment.Moment, to: moment.Moment) {
   return [fromString, toString];
 }
 
-const TimeRange = (props: TimeRangeProps) => {
+export const TimeRange = (props: TimeRangeProps) => {
   const { className, from: f, to: t, onChange, disabled } = props;
 
   const [from, setFrom] = useState<moment.Moment>(getMoments(f, t)[0]);
@@ -59,6 +55,9 @@ const TimeRange = (props: TimeRangeProps) => {
 
   const handleChangeFrom = useCallback(
     (value: moment.Moment) => {
+      if (!value.isValid()) {
+        return;
+      }
       setFrom(value);
 
       if (value.isSame(to, 'minute')) {
@@ -74,6 +73,9 @@ const TimeRange = (props: TimeRangeProps) => {
 
   const handleChangeTo = useCallback(
     (value: moment.Moment) => {
+      if (!value.isValid()) {
+        return;
+      }
       setTo(value);
 
       if (value.isSame(from, 'minute')) {
@@ -88,19 +90,30 @@ const TimeRange = (props: TimeRangeProps) => {
   );
 
   const showNextDayTip = useMemo(() => to.isBefore(from), [from, to]);
+  const styles = useStyles2(getStyles);
 
   return (
-    <div className={cx('root', className)}>
-      <HorizontalGroup wrap>
-        {/* @ts-ignore actually TimeOfDayPicker uses Moment objects */}
-        <TimeOfDayPicker disabled={disabled} value={from} minuteStep={5} onChange={handleChangeFrom} />
+    <div className={cx(styles.root, className)}>
+      <Stack wrap="wrap">
+        <div data-testid="time-range-from">
+          {/* @ts-ignore actually TimeOfDayPicker uses Moment objects */}
+          <TimeOfDayPicker disabled={disabled} value={from} minuteStep={5} onChange={handleChangeFrom} />
+        </div>
         to
-        {/* @ts-ignore actually TimeOfDayPicker uses Moment objects */}
-        <TimeOfDayPicker disabled={disabled} value={to} minuteStep={5} onChange={handleChangeTo} />
+        <div data-testid="time-range-to">
+          {/* @ts-ignore actually TimeOfDayPicker uses Moment objects */}
+          <TimeOfDayPicker disabled={disabled} value={to} minuteStep={5} onChange={handleChangeTo} />
+        </div>
         {showNextDayTip && 'next day'}
-      </HorizontalGroup>
+      </Stack>
     </div>
   );
 };
 
-export default TimeRange;
+const getStyles = () => {
+  return {
+    root: css`
+      display: block;
+    `,
+  };
+};

@@ -11,6 +11,7 @@ from apps.phone_notifications.phone_provider import PhoneProvider, ProviderFlags
 from apps.zvonok.models.phone_call import ZvonokCallStatuses, ZvonokPhoneCall
 
 ZVONOK_CALL_URL = "https://zvonok.com/manager/cabapi_external/api/v1/phones/call/"
+ZVONOK_VERIFICATION_CALL_URL = "https://zvonok.com/manager/cabapi_external/api/v1/phones/tellcode/"
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,15 @@ class ZvonokPhoneProvider(PhoneProvider):
 
         return requests.post(ZVONOK_CALL_URL, params=params)
 
+    def _verification_call_create(self, number: str, code: int):
+        params = {
+            "public_key": live_settings.ZVONOK_API_KEY,
+            "campaign_id": live_settings.ZVONOK_VERIFICATION_CAMPAIGN_ID,
+            "phone": number,
+            "pincode": code,
+        }
+        return requests.post(ZVONOK_VERIFICATION_CALL_URL, params=params)
+
     def _get_graceful_msg(self, body, number):
         if body:
             status = body.get("status")
@@ -104,24 +114,19 @@ class ZvonokPhoneProvider(PhoneProvider):
         return f"Failed make call to {number}"
 
     def make_verification_call(self, number: str):
-        code = str(randint(100000, 999999))
-        cache.set(self._cache_key(number), code, timeout=10 * 60)
-        codewspaces = "   ".join(code)
-
         body = None
-        speaker = live_settings.ZVONOK_SPEAKER_ID
+        code = self._generate_verification_code()
+        cache.set(self._cache_key(number), code, timeout=10 * 60)
+
+        if not live_settings.ZVONOK_VERIFICATION_CAMPAIGN_ID:
+            raise FailedToStartVerification(
+                graceful_msg="Failed make verification call, verification campaign id not set."
+            )
 
         try:
-            response = self._call_create(number, f"Your verification code is {codewspaces}", speaker)
-            response.raise_for_status()
+            response = self._verification_call_create(number, code)
             body = response.json()
-            if not body:
-                logger.error("ZvonokPhoneProvider.make_verification_call: failed, empty body")
-                raise FailedToMakeCall(graceful_msg=f"Failed make verification call to {number}, empty body")
-
-            call_id = body.get("call_id")
-            if not call_id:
-                raise FailedToStartVerification(graceful_msg=self._get_graceful_msg(body, number))
+            response.raise_for_status()
         except requests.exceptions.HTTPError as http_err:
             logger.error(f"ZvonokPhoneProvider.make_verification_call: failed {http_err}")
             raise FailedToStartVerification(graceful_msg=self._get_graceful_msg(body, number))
@@ -138,6 +143,9 @@ class ZvonokPhoneProvider(PhoneProvider):
 
     def _cache_key(self, number):
         return f"zvonok_provider_{number}"
+
+    def _generate_verification_code(self):
+        return str(randint(100000, 999999))
 
     @property
     def flags(self) -> ProviderFlags:

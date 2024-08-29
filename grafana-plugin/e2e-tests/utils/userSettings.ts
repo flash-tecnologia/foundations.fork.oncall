@@ -10,7 +10,6 @@ type NotifyBy = 'SMS' | 'Phone call';
 const openUserSettingsModal = async (page: Page): Promise<void> => {
   await goToOnCallPage(page, 'users');
   await clickButton({ page, buttonText: 'View my profile' });
-  await page.locator('text=To edit user details such as Username, email, and role').waitFor({ state: 'visible' });
 };
 
 const getForgetPhoneNumberButton = (page: Page): Locator => page.locator('button >> text=Forget Phone Number');
@@ -20,7 +19,7 @@ export const verifyUserPhoneNumber = async (page: Page): Promise<void> => {
   await openUserSettingsModal(page);
 
   // go to the Phone Verification tab
-  await page.locator('a[aria-label="Tab Phone Verification"]').click();
+  await page.getByTestId('tab-phone-verification').click();
 
   // check to see if we've already verified our phone number.. no need to do it more than once
   if (await getForgetPhoneNumberButton(page).isVisible()) {
@@ -50,16 +49,15 @@ export const verifyUserPhoneNumber = async (page: Page): Promise<void> => {
   await closeModal(page);
 };
 
+const getDefaultNotificationSettingsSectionByTestId = (page: Page): Locator =>
+  page.getByTestId('default-personal-notification-settings');
+
 /**
  * gets the first row of our default notification settings
  * and then gets the notification type dropdown
  */
 const getFirstDefaultNotificationSettingTypeDropdown = async (page: Page): Promise<Locator> => {
-  const defaultNotificationSettingsList = page.locator('ul[class*="Timeline-module"] >> nth=0');
-  await defaultNotificationSettingsList.waitFor({ state: 'visible' });
-
-  const firstDefaultNotificationSettingRow = defaultNotificationSettingsList.locator('li >> nth=0');
-  await firstDefaultNotificationSettingRow.waitFor({ state: 'visible' });
+  const firstDefaultNotificationSettingRow = getDefaultNotificationSettingsSectionByTestId(page).locator('li >> nth=0');
 
   // get the notification type dropdown specifically
   return firstDefaultNotificationSettingRow.locator('div[class*="input-wrapper"] >> nth=1');
@@ -69,19 +67,19 @@ export const configureUserNotificationSettings = async (page: Page, notifyBy: No
   // open the user settings modal
   await openUserSettingsModal(page);
 
-  /**
-   * see if we already have a default notification setting
-   * if we don't click the Add Notification Step button and add one
-   * otherwise update the existing one
-   */
-  const defaultNotificationsAddNotificationStepButton = page.locator(
-    'div[class*="PersonalNotificationSettings"] >> nth=0 text=Add Notification Step'
-  );
-  if (await defaultNotificationsAddNotificationStepButton.isVisible()) {
-    await defaultNotificationsAddNotificationStepButton.click();
+  // select our notification type, first check if we have any already defined, if so, click the
+  // "Add Notification Step" button
+  const defaultNotificationSettingsSection = getDefaultNotificationSettingsSectionByTestId(page);
+  const addNotificationStepText = 'Add Notification Step';
+
+  if (!(await defaultNotificationSettingsSection.locator(`button >> text=${addNotificationStepText}`).isVisible())) {
+    await clickButton({
+      page,
+      buttonText: addNotificationStepText,
+      startingLocator: defaultNotificationSettingsSection,
+    });
   }
 
-  // select our notification type
   const firstDefaultNotificationTypeDropdopdown = await getFirstDefaultNotificationSettingTypeDropdown(page);
   await selectDropdownValue({
     page,

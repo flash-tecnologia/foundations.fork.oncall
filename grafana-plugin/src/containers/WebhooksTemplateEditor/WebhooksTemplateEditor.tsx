@@ -1,40 +1,46 @@
 import React, { useCallback, useState } from 'react';
 
-import { Button, Drawer, HorizontalGroup, VerticalGroup } from '@grafana/ui';
+import { Button, Drawer, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { debounce } from 'lodash-es';
 
-import CheatSheet from 'components/CheatSheet/CheatSheet';
-import { genericTemplateCheatSheet } from 'components/CheatSheet/CheatSheet.config';
-import MonacoEditor from 'components/MonacoEditor/MonacoEditor';
-import Text from 'components/Text/Text';
+import { CheatSheet } from 'components/CheatSheet/CheatSheet';
+import { genericTemplateCheatSheet, webhookPayloadCheatSheet } from 'components/CheatSheet/CheatSheet.config';
+import { MonacoEditor } from 'components/MonacoEditor/MonacoEditor';
+import { Text } from 'components/Text/Text';
 import styles from 'containers/IntegrationTemplate/IntegrationTemplate.module.scss';
-import TemplateResult from 'containers/TemplateResult/TemplateResult';
-import TemplatesAlertGroupsList, { TEMPLATE_PAGE } from 'containers/TemplatesAlertGroupsList/TemplatesAlertGroupsList';
+import { TemplatePage } from 'containers/TemplatePreview/TemplatePreview';
+import { TemplateResult } from 'containers/TemplateResult/TemplateResult';
+import { TemplatesAlertGroupsList } from 'containers/TemplatesAlertGroupsList/TemplatesAlertGroupsList';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
-import { OutgoingWebhook } from 'models/outgoing_webhook/outgoing_webhook.types';
-import { UserActions } from 'utils/authorization';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { UserActions } from 'utils/authorization/authorization';
 
 const cx = cn.bind(styles);
 
 interface Template {
   value: string;
   displayName: string;
-  description: string;
-  name: undefined;
+  description?: string;
+  name: string;
 }
 
 interface WebhooksTemplateEditorProps {
   template: Template;
-  id: OutgoingWebhook['id'];
+  id: ApiSchemas['Webhook']['id'];
   onHide: () => void;
   handleSubmit: (template: string) => void;
 }
 
-const WebhooksTemplateEditor: React.FC<WebhooksTemplateEditorProps> = ({ template, id, onHide, handleSubmit }) => {
-  const [isCheatSheetVisible, setIsCheatSheetVisible] = useState<boolean>(false);
-  const [changedTemplateBody, setChangedTemplateBody] = useState<string>(template.value);
-  const [selectedPayload, setSelectedPayload] = useState(undefined);
+export const WebhooksTemplateEditor: React.FC<WebhooksTemplateEditorProps> = ({
+  template,
+  id,
+  onHide,
+  handleSubmit,
+}) => {
+  const [isCheatSheetVisible, setIsCheatSheetVisible] = useState(false);
+  const [changedTemplateBody, setChangedTemplateBody] = useState(template.value);
+  const [selectedPayload, setSelectedPayload] = useState();
   const [resultError, setResultError] = useState<string>(undefined);
 
   const getChangeHandler = () => {
@@ -70,17 +76,26 @@ const WebhooksTemplateEditor: React.FC<WebhooksTemplateEditorProps> = ({ templat
     setIsCheatSheetVisible(false);
   }, []);
 
+  const getCheatSheet = (templateKey: string) => {
+    switch (templateKey) {
+      case 'data':
+        return webhookPayloadCheatSheet;
+      default:
+        return genericTemplateCheatSheet;
+    }
+  };
+
   return (
     <Drawer
       title={
         <div className={cx('title-container')}>
-          <HorizontalGroup justify="space-between" align="flex-start">
-            <VerticalGroup>
+          <Stack justifyContent="space-between" alignItems="flex-start">
+            <Stack direction="column">
               <Text.Title level={3}>Edit {template.displayName} template</Text.Title>
               {template.description && <Text type="secondary">{template.description}</Text>}
-            </VerticalGroup>
+            </Stack>
 
-            <HorizontalGroup>
+            <Stack>
               <WithPermissionControlTooltip userAction={UserActions.OutgoingWebhooksWrite}>
                 <Button variant="secondary" onClick={onHide}>
                   Cancel
@@ -91,8 +106,8 @@ const WebhooksTemplateEditor: React.FC<WebhooksTemplateEditorProps> = ({ templat
                   Save
                 </Button>
               </WithPermissionControlTooltip>
-            </HorizontalGroup>
-          </HorizontalGroup>
+            </Stack>
+          </Stack>
         </div>
       }
       onClose={onHide}
@@ -103,7 +118,7 @@ const WebhooksTemplateEditor: React.FC<WebhooksTemplateEditorProps> = ({ templat
         <div className={cx('container')}>
           <TemplatesAlertGroupsList
             heading="Last events"
-            templatePage={TEMPLATE_PAGE.Webhooks}
+            templatePage={TemplatePage.Webhooks}
             outgoingwebhookId={id}
             onEditPayload={onEditPayload}
             templates={
@@ -118,20 +133,20 @@ const WebhooksTemplateEditor: React.FC<WebhooksTemplateEditorProps> = ({ templat
 
           {isCheatSheetVisible ? (
             <CheatSheet
-              cheatSheetName="Generic"
-              cheatSheetData={genericTemplateCheatSheet}
+              cheatSheetName={template.displayName}
+              cheatSheetData={getCheatSheet(template.name)}
               onClose={onCloseCheatSheet}
             />
           ) : (
             <>
               <div className={cx('template-block-codeeditor')}>
                 <div className={cx('template-editor-block-title')}>
-                  <HorizontalGroup justify="space-between" align="center" wrap>
+                  <Stack justifyContent="space-between" alignItems="center" wrap="wrap">
                     <Text>Template editor</Text>
                     <Button variant="secondary" fill="outline" onClick={onShowCheatSheet} icon="book" size="sm">
                       Cheatsheet
                     </Button>
-                  </HorizontalGroup>
+                  </Stack>
                 </div>
                 <div className={cx('template-editor-block-content')}>
                   <MonacoEditor
@@ -147,7 +162,7 @@ const WebhooksTemplateEditor: React.FC<WebhooksTemplateEditorProps> = ({ templat
             </>
           )}
           <TemplateResult
-            templatePage={TEMPLATE_PAGE.Webhooks}
+            templatePage={TemplatePage.Webhooks}
             outgoingWebhookId={id}
             template={template}
             templateBody={changedTemplateBody}
@@ -162,5 +177,3 @@ const WebhooksTemplateEditor: React.FC<WebhooksTemplateEditorProps> = ({ templat
     </Drawer>
   );
 };
-
-export default WebhooksTemplateEditor;

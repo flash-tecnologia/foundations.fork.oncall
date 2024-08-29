@@ -9,6 +9,7 @@ from slack_sdk.web import SlackResponse
 from apps.slack.client import SlackClient, server_error_retry_handler
 from apps.slack.errors import (
     SlackAPICannotDMBotError,
+    SlackAPICantUpdateMessageError,
     SlackAPIChannelArchivedError,
     SlackAPIChannelInactiveError,
     SlackAPIChannelNotFoundError,
@@ -24,6 +25,7 @@ from apps.slack.errors import (
     SlackAPIServerError,
     SlackAPITokenError,
     SlackAPIUsergroupNotFoundError,
+    SlackAPIUsergroupPaidTeamOnlyError,
     SlackAPIUserNotFoundError,
     SlackAPIViewNotFoundError,
 )
@@ -116,6 +118,7 @@ def test_slack_client_generic_error(mock_request, monkeypatch, make_organization
     [
         ("account_inactive", SlackAPITokenError),
         ("cannot_dm_bot", SlackAPICannotDMBotError),
+        ("cant_update_message", SlackAPICantUpdateMessageError),
         ("channel_not_found", SlackAPIChannelNotFoundError),
         ("fatal_error", SlackAPIServerError),
         ("fetch_members_failed", SlackAPIFetchMembersFailedError),
@@ -127,6 +130,7 @@ def test_slack_client_generic_error(mock_request, monkeypatch, make_organization
         ("message_not_found", SlackAPIMessageNotFoundError),
         ("method_not_supported_for_channel_type", SlackAPIMethodNotSupportedForChannelTypeError),
         ("no_such_subteam", SlackAPIUsergroupNotFoundError),
+        ("paid_team_only", SlackAPIUsergroupPaidTeamOnlyError),
         ("not_found", SlackAPIViewNotFoundError),
         ("permission_denied", SlackAPIPermissionDeniedError),
         ("plan_upgrade_required", SlackAPIPlanUpgradeRequiredError),

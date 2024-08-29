@@ -98,7 +98,7 @@ def test_filter_events(make_organization, make_user_for_organization, make_sched
                     "display_name": user.username,
                     "pk": user.public_primary_key,
                     "email": user.email,
-                    "avatar_full": user.avatar_full_url,
+                    "avatar_full": user.avatar_full_url(organization),
                 },
             ],
             "shift": {"pk": on_call_shift.public_primary_key},
@@ -120,14 +120,14 @@ def test_filter_events(make_organization, make_user_for_organization, make_sched
             "is_override": True,
             "is_empty": False,
             "is_gap": False,
-            "priority_level": None,
+            "priority_level": 0,
             "missing_users": [],
             "users": [
                 {
                     "display_name": user.username,
                     "pk": user.public_primary_key,
                     "email": user.email,
-                    "avatar_full": user.avatar_full_url,
+                    "avatar_full": user.avatar_full_url(organization),
                 },
             ],
             "shift": {"pk": override.public_primary_key},
@@ -178,7 +178,7 @@ def test_filter_events_include_gaps(make_organization, make_user_for_organizatio
             "is_override": False,
             "is_empty": False,
             "is_gap": True,
-            "priority_level": None,
+            "priority_level": 0,
             "missing_users": [],
             "users": [],
             "shift": {"pk": None},
@@ -199,7 +199,7 @@ def test_filter_events_include_gaps(make_organization, make_user_for_organizatio
                     "display_name": user.username,
                     "pk": user.public_primary_key,
                     "email": user.email,
-                    "avatar_full": user.avatar_full_url,
+                    "avatar_full": user.avatar_full_url(organization),
                 },
             ],
             "shift": {"pk": on_call_shift.public_primary_key},
@@ -213,7 +213,7 @@ def test_filter_events_include_gaps(make_organization, make_user_for_organizatio
             "is_override": False,
             "is_empty": False,
             "is_gap": True,
-            "priority_level": None,
+            "priority_level": 0,
             "missing_users": [],
             "users": [],
             "shift": {"pk": None},
@@ -263,7 +263,7 @@ def test_filter_events_include_shift_info(
             "is_override": False,
             "is_empty": False,
             "is_gap": True,
-            "priority_level": None,
+            "priority_level": 0,
             "missing_users": [],
             "users": [],
             "shift": {"pk": None},
@@ -284,7 +284,7 @@ def test_filter_events_include_shift_info(
                     "display_name": user.username,
                     "pk": user.public_primary_key,
                     "email": user.email,
-                    "avatar_full": user.avatar_full_url,
+                    "avatar_full": user.avatar_full_url(organization),
                 },
             ],
             "shift": {
@@ -302,7 +302,7 @@ def test_filter_events_include_shift_info(
             "is_override": False,
             "is_empty": False,
             "is_gap": True,
-            "priority_level": None,
+            "priority_level": 0,
             "missing_users": [],
             "users": [],
             "shift": {"pk": None},
@@ -512,7 +512,7 @@ def test_final_schedule_events(
             "end": start_date + timezone.timedelta(hours=start + duration),
             "is_gap": is_gap,
             "is_override": is_override,
-            "priority_level": priority,
+            "priority_level": priority or 0,
             "start": start_date + timezone.timedelta(hours=start),
             "user": user,
             "shift": (
@@ -599,7 +599,7 @@ def test_final_schedule_override_no_priority_shift(
             "calendar_type": 1 if is_override else 0,
             "end": start_date + timezone.timedelta(hours=start + duration),
             "is_override": is_override,
-            "priority_level": priority,
+            "priority_level": priority or 0,
             "start": start_date + timezone.timedelta(hours=start, milliseconds=1 if start == 0 else 0),
             "user": user,
         }
@@ -679,7 +679,7 @@ def test_final_schedule_override_split(
             "calendar_type": 1 if is_override else 0,
             "end": start_date + timezone.timedelta(hours=start + duration),
             "is_override": is_override,
-            "priority_level": priority,
+            "priority_level": priority or 0,
             "start": start_date + timezone.timedelta(hours=start, milliseconds=1 if start == 0 else 0),
             "user": user,
         }
@@ -899,7 +899,7 @@ def test_preview_shift(make_organization, make_user_for_organization, make_sched
                     "display_name": other_user.username,
                     "pk": other_user.public_primary_key,
                     "email": other_user.email,
-                    "avatar_full": other_user.avatar_full_url,
+                    "avatar_full": other_user.avatar_full_url(organization),
                 },
             ],
             "shift": {"pk": new_shift.public_primary_key},
@@ -1001,7 +1001,7 @@ def test_preview_shift_do_not_change_rotation_events(
                     "display_name": user.username,
                     "pk": user.public_primary_key,
                     "email": user.email,
-                    "avatar_full": user.avatar_full_url,
+                    "avatar_full": user.avatar_full_url(organization),
                 },
             ],
             "shift": {"pk": on_call_shift.public_primary_key},
@@ -1051,7 +1051,7 @@ def test_preview_shift_no_user(make_organization, make_user_for_organization, ma
             "is_override": False,
             "is_empty": True,
             "is_gap": False,
-            "priority_level": None,
+            "priority_level": 0,
             "missing_users": [],
             "users": [],
             "shift": {"pk": new_shift.public_primary_key},
@@ -1130,14 +1130,14 @@ def test_preview_override_shift(make_organization, make_user_for_organization, m
             "is_override": True,
             "is_empty": False,
             "is_gap": False,
-            "priority_level": None,
+            "priority_level": 0,
             "missing_users": [],
             "users": [
                 {
                     "display_name": other_user.username,
                     "pk": other_user.public_primary_key,
                     "email": other_user.email,
-                    "avatar_full": other_user.avatar_full_url,
+                    "avatar_full": other_user.avatar_full_url(organization),
                 },
             ],
             "shift": {"pk": new_shift.public_primary_key},
@@ -1156,7 +1156,7 @@ def test_preview_override_shift(make_organization, make_user_for_organization, m
     expected_events = [
         {
             "end": start_date + timezone.timedelta(hours=start + duration),
-            "priority_level": priority,
+            "priority_level": priority or 0,
             "start": start_date + timezone.timedelta(hours=start, milliseconds=1 if start == 0 else 0),
             "user": user,
             "is_override": is_override,
@@ -2663,7 +2663,7 @@ def test_shifts_for_user(
     schedule.refresh_ical_file()
     schedule.refresh_ical_final_schedule()
 
-    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(admin, now)
+    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(admin, now, days=7)
     assert len(passed_shifts) == 0
     assert len(current_shifts) == 1
     assert len(upcoming_shifts) == 7
@@ -2678,7 +2678,7 @@ def test_shifts_for_user(
             users = {u["pk"] for u in shift["users"]}
             assert admin.public_primary_key in users
 
-    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(other_user, now)
+    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(other_user, now, days=7)
     assert len(passed_shifts) == 0
     assert len(current_shifts) == 0
     assert len(upcoming_shifts) == 0
@@ -2731,7 +2731,7 @@ def test_shifts_for_user_only_two_users_with_shifts(
 
     schedule.refresh_ical_final_schedule()
 
-    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(current_user, start_date, days)
+    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(current_user, start_date, days=days)
     assert len(passed_shifts) == 0
     assert len(current_shifts) == 0
     assert len(upcoming_shifts) == 4
@@ -2740,7 +2740,7 @@ def test_shifts_for_user_only_two_users_with_shifts(
         assert current_user.public_primary_key in users
         assert shift["start"] > now
 
-    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(user2, start_date, days)
+    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(user2, start_date, days=days)
     assert len(passed_shifts) > 0
     assert len(current_shifts) > 0
     assert len(upcoming_shifts) > 0
@@ -2774,7 +2774,7 @@ def test_shifts_for_user_no_events(
     start_date = today - timezone.timedelta(days=2)
     days = 7
 
-    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(current_user, start_date, days)
+    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(current_user, start_date, days=days)
     assert len(passed_shifts) == 0
     assert len(current_shifts) == 0
     assert len(upcoming_shifts) == 0
@@ -2795,7 +2795,7 @@ def test_shifts_for_user_without_final_ical(
     start_date = today - timezone.timedelta(days=2)
     days = 7
 
-    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(user, start_date, days)
+    passed_shifts, current_shifts, upcoming_shifts = schedule.shifts_for_user(user, start_date, days=days)
     assert len(passed_shifts) == 0
     assert len(current_shifts) == 0
     assert len(upcoming_shifts) == 0

@@ -1,18 +1,18 @@
 import React, { useState, useCallback, useEffect, useRef, FC } from 'react';
 
-import { Alert, HorizontalGroup, Icon, Input, LoadingPlaceholder, RadioButtonGroup } from '@grafana/ui';
+import { Alert, Icon, Input, LoadingPlaceholder, RadioButtonGroup, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 import { ColumnsType } from 'rc-table/lib/interface';
 
-import Avatar from 'components/Avatar/Avatar';
-import GTable from 'components/GTable/GTable';
-import Text from 'components/Text/Text';
-import { Alert as AlertType } from 'models/alertgroup/alertgroup.types';
+import { Avatar } from 'components/Avatar/Avatar';
+import { GTable } from 'components/GTable/GTable';
+import { Text } from 'components/Text/Text';
 import { GrafanaTeam } from 'models/grafana_team/grafana_team.types';
-import { PaginatedUsersResponse } from 'models/user/user';
-import { UserCurrentlyOnCall } from 'models/user/user.types';
+import { UserHelper } from 'models/user/user.helpers';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { useStore } from 'state/useStore';
+import { StackSize } from 'utils/consts';
 import { useDebouncedCallback, useOnClickOutside } from 'utils/hooks';
 
 import styles from './AddRespondersPopup.module.scss';
@@ -22,10 +22,10 @@ type Props = {
   visible: boolean;
   setVisible: (value: boolean) => void;
 
-  setCurrentlyConsideredUser: (user: UserCurrentlyOnCall) => void;
+  setCurrentlyConsideredUser: (user: ApiSchemas['UserIsCurrentlyOnCall']) => void;
   setShowUserConfirmationModal: (value: boolean) => void;
 
-  existingPagedUsers?: AlertType['paged_users'];
+  existingPagedUsers?: ApiSchemas['AlertGroup']['paged_users'];
 };
 
 const cx = cn.bind(styles);
@@ -35,7 +35,7 @@ enum TabOptions {
   Users = 'users',
 }
 
-const AddRespondersPopup = observer(
+export const AddRespondersPopup = observer(
   ({
     mode,
     visible,
@@ -44,17 +44,21 @@ const AddRespondersPopup = observer(
     setCurrentlyConsideredUser,
     setShowUserConfirmationModal,
   }: Props) => {
-    const { directPagingStore, grafanaTeamStore, userStore } = useStore();
+    const { directPagingStore, grafanaTeamStore } = useStore();
     const { selectedTeamResponder, selectedUserResponders } = directPagingStore;
 
     const isCreateMode = mode === 'create';
 
-    const [searchLoading, setSearchLoading] = useState<boolean>(true);
+    const [searchLoading, setSearchLoading] = useState(true);
     const [activeOption, setActiveOption] = useState<TabOptions>(isCreateMode ? TabOptions.Teams : TabOptions.Users);
     const [teamSearchResults, setTeamSearchResults] = useState<GrafanaTeam[]>([]);
-    const [onCallUserSearchResults, setOnCallUserSearchResults] = useState<UserCurrentlyOnCall[]>([]);
-    const [notOnCallUserSearchResults, setNotOnCallUserSearchResults] = useState<UserCurrentlyOnCall[]>([]);
-    const [searchTerm, setSearchTerm] = useState('');
+    const [onCallUserSearchResults, setOnCallUserSearchResults] = useState<Array<ApiSchemas['UserIsCurrentlyOnCall']>>(
+      []
+    );
+    const [notOnCallUserSearchResults, setNotOnCallUserSearchResults] = useState<
+      Array<ApiSchemas['UserIsCurrentlyOnCall']>
+    >([]);
+    const [search, setSearch] = useState('');
 
     const ref = useRef();
 
@@ -62,15 +66,15 @@ const AddRespondersPopup = observer(
       setVisible(false);
     });
 
-    const handleSetSearchTerm = useCallback(
+    const handleSetSearch = useCallback(
       (e: React.ChangeEvent<HTMLInputElement>) => {
-        setSearchTerm(e.target.value);
+        setSearch(e.target.value);
       },
-      [setSearchTerm]
+      [setSearch]
     );
 
     const onClickUser = useCallback(
-      async (user: UserCurrentlyOnCall) => {
+      async (user: ApiSchemas['UserIsCurrentlyOnCall']) => {
         if (isCreateMode && user.is_currently_oncall) {
           directPagingStore.addUserToSelectedUsers(user);
         } else {
@@ -98,8 +102,8 @@ const AddRespondersPopup = observer(
 
     const searchForUsers = useCallback(async () => {
       const _search = async (is_currently_oncall: boolean) => {
-        const response = await userStore.search<PaginatedUsersResponse<UserCurrentlyOnCall>>({
-          searchTerm,
+        const response = await UserHelper.search({
+          search,
           is_currently_oncall,
         });
         return response.results;
@@ -107,16 +111,16 @@ const AddRespondersPopup = observer(
 
       const [onCallUserSearchResults, notOnCallUserSearchResults] = await Promise.all([_search(true), _search(false)]);
 
-      setOnCallUserSearchResults(onCallUserSearchResults);
-      setNotOnCallUserSearchResults(notOnCallUserSearchResults);
-    }, [searchTerm]);
+      setOnCallUserSearchResults(onCallUserSearchResults as Array<ApiSchemas['UserIsCurrentlyOnCall']>);
+      setNotOnCallUserSearchResults(notOnCallUserSearchResults as Array<ApiSchemas['UserIsCurrentlyOnCall']>);
+    }, [search]);
 
     const searchForTeams = useCallback(async () => {
-      await grafanaTeamStore.updateItems(searchTerm, false, true, false);
+      await grafanaTeamStore.updateItems(search, false, true, false);
       setTeamSearchResults(grafanaTeamStore.getSearchResult());
-    }, [searchTerm]);
+    }, [search]);
 
-    const handleSearchTermChange = useDebouncedCallback(async () => {
+    const handleSearchChange = useDebouncedCallback(async () => {
       setSearchLoading(true);
 
       if (isCreateMode && activeOption === TabOptions.Teams) {
@@ -134,7 +138,7 @@ const AddRespondersPopup = observer(
          * there's no need to trigger a new search request when the user changes tabs if they don't have a
          * search term
          */
-        if (searchTerm) {
+        if (search) {
           setSearchLoading(true);
 
           if (activeOption === TabOptions.Teams) {
@@ -148,10 +152,10 @@ const AddRespondersPopup = observer(
 
         setActiveOption(tab);
       },
-      [searchTerm]
+      [search]
     );
 
-    useEffect(handleSearchTermChange, [searchTerm]);
+    useEffect(handleSearchChange, [search]);
 
     /**
      * in the context where some user(s) have already been paged (ex. on a direct paging generated
@@ -161,7 +165,7 @@ const AddRespondersPopup = observer(
       if (existingPagedUsers.length > 0) {
         const existingPagedUserIds = existingPagedUsers.map(({ pk }) => pk);
 
-        const _filterUsers = (users: UserCurrentlyOnCall[]) =>
+        const _filterUsers = (users: Array<ApiSchemas['UserIsCurrentlyOnCall']>) =>
           users.filter(({ pk }) => !existingPagedUserIds.includes(pk));
 
         setOnCallUserSearchResults(_filterUsers);
@@ -188,7 +192,8 @@ const AddRespondersPopup = observer(
     }, []);
 
     const userIsSelected = useCallback(
-      (user: UserCurrentlyOnCall) => selectedUserResponders.some((userResponder) => userResponder.data.pk === user.pk),
+      (user: ApiSchemas['UserIsCurrentlyOnCall']) =>
+        selectedUserResponders.some((userResponder) => userResponder.data.pk === user.pk),
       [selectedUserResponders]
     );
 
@@ -201,17 +206,17 @@ const AddRespondersPopup = observer(
 
           return (
             <div onClick={() => addTeamResponder(team)} className={cx('responder-item')}>
-              <HorizontalGroup justify="space-between">
-                <HorizontalGroup>
+              <Stack justifyContent="space-between">
+                <Stack>
                   <Avatar size="small" src={avatar_url} />
                   <Text>{name}</Text>
-                </HorizontalGroup>
+                </Stack>
                 {number_of_users_currently_oncall > 0 && (
                   <Text type="secondary">
                     {number_of_users_currently_oncall} user{number_of_users_currently_oncall > 1 ? 's' : ''} on-call
                   </Text>
                 )}
-              </HorizontalGroup>
+              </Stack>
             </div>
           );
         },
@@ -219,24 +224,30 @@ const AddRespondersPopup = observer(
       },
     ];
 
-    const userColumns: ColumnsType<UserCurrentlyOnCall> = [
+    const userColumns: ColumnsType<ApiSchemas['UserIsCurrentlyOnCall']> = [
       // TODO: how to make the rows span full width properly?
       {
         width: 300,
-        render: (user: UserCurrentlyOnCall) => {
+        render: (user: ApiSchemas['UserIsCurrentlyOnCall']) => {
           const { avatar, name, username, teams } = user;
           const disabled = userIsSelected(user);
 
           return (
             <div onClick={() => (disabled ? undefined : onClickUser(user))} className={cx('responder-item')}>
-              <HorizontalGroup justify="space-between">
-                <HorizontalGroup>
+              <Stack justifyContent="space-between">
+                <Stack>
                   <Avatar size="small" src={avatar} />
-                  <Text type={disabled ? 'disabled' : undefined}>{name || username}</Text>
-                </HorizontalGroup>
+                  <Text type={disabled ? 'disabled' : undefined} className={cx('responder-name')}>
+                    {name || username}
+                  </Text>
+                </Stack>
                 {/* TODO: we should add an elippsis and/or tooltip in the event that the user has a ton of teams */}
-                {teams?.length > 0 && <Text type="secondary">{teams.map(({ name }) => name).join(', ')}</Text>}
-              </HorizontalGroup>
+                {teams?.length > 0 && (
+                  <Text type="secondary" className={cx('responder-team')}>
+                    {teams.map(({ name }) => name).join(', ')}
+                  </Text>
+                )}
+              </Stack>
             </div>
           );
         },
@@ -244,18 +255,21 @@ const AddRespondersPopup = observer(
       },
       {
         width: 40,
-        render: (user: UserCurrentlyOnCall) => (userIsSelected(user) ? <Icon name="check" /> : null),
+        render: (user: ApiSchemas['UserIsCurrentlyOnCall']) => (userIsSelected(user) ? <Icon name="check" /> : null),
         key: 'Checked',
       },
     ];
 
-    const UserResultsSection: FC<{ header: string; users: UserCurrentlyOnCall[] }> = ({ header, users }) =>
+    const UserResultsSection: FC<{ header: string; users: Array<ApiSchemas['UserIsCurrentlyOnCall']> }> = ({
+      header,
+      users,
+    }) =>
       users.length > 0 && (
         <>
           <Text type="secondary" className={cx('user-results-section-header')}>
             {header}
           </Text>
-          <GTable<UserCurrentlyOnCall>
+          <GTable<ApiSchemas['UserIsCurrentlyOnCall']>
             emptyText={users ? 'No users found' : 'Loading...'}
             rowKey="pk"
             columns={userColumns}
@@ -274,11 +288,11 @@ const AddRespondersPopup = observer(
             key="search"
             className={cx('responders-filters')}
             data-testid="add-responders-search-input"
-            value={searchTerm}
+            value={search}
             placeholder="Search"
             // @ts-ignore
             width={'unset'}
-            onChange={handleSetSearchTerm}
+            onChange={handleSetSearch}
           />
           {isCreateMode && (
             <RadioButtonGroup
@@ -316,10 +330,10 @@ const AddRespondersPopup = observer(
                             rel="noreferrer"
                           >
                             <Text type="link">
-                              <HorizontalGroup spacing="xs">
+                              <Stack gap={StackSize.xs}>
                                 Learn more
                                 <Icon name="external-link-alt" />
-                              </HorizontalGroup>
+                              </Stack>
                             </Text>
                           </a>
                         </Text>
@@ -363,5 +377,3 @@ const AddRespondersPopup = observer(
     );
   }
 );
-
-export default AddRespondersPopup;

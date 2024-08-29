@@ -1,6 +1,8 @@
 import enum
 import json
+import logging
 import typing
+from urllib.parse import urljoin
 from uuid import uuid4
 
 from django.conf import settings
@@ -9,10 +11,13 @@ from rest_framework.response import Response
 
 from apps.alerts.models import AlertReceiveChannel
 from apps.alerts.paging import DirectPagingUserTeamValidationError, UserNotifications, direct_paging, user_is_oncall
+from apps.api.permissions import RBACPermission, user_is_authorized
 from apps.schedules.ical_utils import get_cached_oncall_users_for_multiple_schedules
+from apps.slack.chatops_proxy_routing import make_private_metadata, make_value
 from apps.slack.constants import DIVIDER, PRIVATE_METADATA_MAX_LENGTH
-from apps.slack.errors import SlackAPIChannelNotFoundError
+from apps.slack.errors import SlackAPIChannelNotFoundError, SlackAPIError
 from apps.slack.scenarios import scenario_step
+from apps.slack.slash_command import SlashCommand
 from apps.slack.types import (
     Block,
     BlockActionType,
@@ -23,6 +28,8 @@ from apps.slack.types import (
     PayloadType,
     ScenarioRoute,
 )
+
+logger = logging.getLogger(__name__)
 
 if typing.TYPE_CHECKING:
     from django.db.models.manager import RelatedManager
@@ -113,13 +120,20 @@ def get_current_items(
 class StartDirectPaging(scenario_step.ScenarioStep):
     """Handle slash command invocation and show initial dialog."""
 
-    command_name = [settings.SLACK_DIRECT_PAGING_SLASH_COMMAND]
+    @staticmethod
+    def matcher(slash_command: SlashCommand) -> bool:
+        # Check if command is /escalate. It's a legacy command we keep for smooth transition.
+        is_legacy_command = slash_command.command == settings.SLACK_DIRECT_PAGING_SLASH_COMMAND
+        # Check if command is /grafana escalate. It's a new command from unified app.
+        is_unified_app_command = slash_command.is_root_command and slash_command.subcommand == "escalate"
+        return is_legacy_command or is_unified_app_command
 
     def process_scenario(
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         input_id_prefix = _generate_input_id_prefix()
 
@@ -128,12 +142,54 @@ class StartDirectPaging(scenario_step.ScenarioStep):
         except KeyError:
             channel_id = payload["channel_id"]
 
+        if settings.UNIFIED_SLACK_APP_ENABLED:
+            if slack_team_identity.needs_reinstall:
+                organizations = _get_available_organizations(slack_team_identity, slack_user_identity)
+                if len(organizations) == 1:
+                    # Provide a link  to web if user has access only to one organization
+                    link = urljoin(organizations[0].web_link, "settings?tab=ChatOps&chatOpsTab=Slack")
+                else:
+                    # Otherwise, provide a link to the documentation
+                    link = (
+                        "https://grafana.com/docs/grafana-cloud/alerting-and-irm/oncall/configure/integrations"
+                        "/references/slack/#migrate-to-the-grafana-irm-slack-integration"
+                    )
+                upgrade = f"<{link}|Upgrade>"
+                msg = (
+                    f"The new Slack IRM integration is now available. f{upgrade} for a more powerful and flexible "
+                    f"way to interact with Grafana IRM on Slack."
+                )
+                try:
+                    self._slack_client.chat_postEphemeral(
+                        channel=channel_id, user=slack_user_identity.slack_id, text=msg
+                    )
+                except SlackAPIError:
+                    # catch all exceptions to prevent the slash command from failing
+                    logger.warning("StartDirectPaging: failed to send ephemeral message to user", exc_info=True)
+            else:
+                # hack, parsing command again to determine if it's a legacy command
+                cmd = SlashCommand.parse(payload)
+                is_legacy_command = cmd.command == settings.SLACK_DIRECT_PAGING_SLASH_COMMAND
+                if is_legacy_command:
+                    self._slack_client.chat_postEphemeral(
+                        channel=channel_id,
+                        user=slack_user_identity.slack_id,
+                        text=f"The new Slack IRM integration is now available. "
+                        f"Please use `/{settings.SLACK_IRM_ROOT_COMMAND}` escalate to complete the action",
+                    )
+                    return
+
         private_metadata = {
             "channel_id": channel_id,
             "input_id_prefix": input_id_prefix,
             "submit_routing_uid": FinishDirectPaging.routing_uid(),
             DataKey.USERS: {},
         }
+        # We have access to predefined org only in StartDirectPaging, since it's a slash command.
+        # Chatops-Proxy adds a special header to slash commands payload to define the organization.
+        # Other Paging steps are triggered by buttons and actions,
+        # so we don't have access to predefined org and use private metadata instead.
+        private_metadata = _inject_predefined_org_to_private_metadata(predefined_org, private_metadata)
         initial_payload = {"view": {"private_metadata": json.dumps(private_metadata)}}
         view = render_dialog(slack_user_identity, slack_team_identity, initial_payload, initial=True)
         self._slack_client.views_open(
@@ -145,19 +201,38 @@ class StartDirectPaging(scenario_step.ScenarioStep):
 class FinishDirectPaging(scenario_step.ScenarioStep):
     """Handle page command dialog submit."""
 
+    REQUIRED_PERMISSIONS = [RBACPermission.Permissions.ALERT_GROUPS_DIRECT_PAGING]
+
     def process_scenario(
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         message = _get_message_from_payload(payload)
         private_metadata = json.loads(payload["view"]["private_metadata"])
+        predefined_org = _get_predefined_org_from_private_metadata(private_metadata, slack_team_identity)
         channel_id = private_metadata["channel_id"]
         input_id_prefix = private_metadata["input_id_prefix"]
-        selected_organization = _get_selected_org_from_payload(
+        selected_organization = predefined_org or _get_selected_org_from_payload(
             payload, input_id_prefix, slack_team_identity, slack_user_identity
         )
+
+        # get user in the context of the selected_organization
+        user = slack_user_identity.get_user(selected_organization)
+        if not user_is_authorized(user, self.REQUIRED_PERMISSIONS):
+            unauthorized_error = _get_unauthorized_warning(error=True)
+            return Response(
+                {
+                    "response_action": "update",
+                    "view": render_dialog(
+                        slack_user_identity, slack_team_identity, payload, validation_errors=unauthorized_error
+                    ),
+                },
+                status=200,
+            )
+
         _, selected_team = _get_selected_team_from_payload(payload, input_id_prefix)
         user = slack_user_identity.get_user(selected_organization)
 
@@ -226,7 +301,8 @@ class OnPagingOrgChange(scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         updated_payload = reset_items(payload)
         view = render_dialog(slack_user_identity, slack_team_identity, updated_payload)
@@ -244,7 +320,8 @@ class OnPagingTeamChange(scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         view = render_dialog(slack_user_identity, slack_team_identity, payload)
         self._slack_client.views_update(
@@ -264,7 +341,8 @@ class OnPagingUserChange(scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         private_metadata = json.loads(payload["view"]["private_metadata"])
         selected_user = _get_selected_user_from_payload(payload, private_metadata["input_id_prefix"])
@@ -274,19 +352,21 @@ class OnPagingUserChange(scenario_step.ScenarioStep):
         # check if user is on-call
         if not user_is_oncall(selected_user):
             # display additional confirmation modal
-            metadata = metadata = json.loads(payload["view"]["private_metadata"])
-            private_metadata = json.dumps(
-                {
-                    "state": payload["view"]["state"],
-                    "input_id_prefix": metadata["input_id_prefix"],
-                    "channel_id": metadata["channel_id"],
-                    "submit_routing_uid": metadata["submit_routing_uid"],
-                    DataKey.USERS: metadata[DataKey.USERS],
-                }
-            )
+            metadata = json.loads(payload["view"]["private_metadata"])
+            private_metadata = {
+                "state": payload["view"]["state"],
+                "input_id_prefix": metadata["input_id_prefix"],
+                "channel_id": metadata["channel_id"],
+                "submit_routing_uid": metadata["submit_routing_uid"],
+                DataKey.USERS: metadata[DataKey.USERS],
+            }
+            # keep predefined organization in private metadata
+            if "organization_id" in metadata:
+                private_metadata["organization_id"] = metadata["organization_id"]
 
             view = _display_confirm_participant_invitation_view(
-                OnPagingConfirmUserChange.routing_uid(), private_metadata
+                OnPagingConfirmUserChange.routing_uid(),
+                make_private_metadata(private_metadata, selected_user.organization),
             )
             self._slack_client.views_push(trigger_id=payload["trigger_id"], view=view)
         else:
@@ -308,15 +388,16 @@ class OnPagingUserChange(scenario_step.ScenarioStep):
 class OnPagingItemActionChange(scenario_step.ScenarioStep):
     """Reload form with updated user details."""
 
-    def _parse_action(self, payload: EventPayload) -> typing.Tuple[Policy, str, str]:
-        value = payload["actions"][0]["selected_option"]["value"]
-        return value.split("|")
+    def _parse_action(self, payload: EventPayload) -> typing.Tuple[Policy, DataKey, str]:
+        value = json.loads(payload["actions"][0]["selected_option"]["value"])
+        return value["action"], value["key"], value["id"]
 
     def process_scenario(
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         policy, key, user_pk = self._parse_action(payload)
 
@@ -341,7 +422,8 @@ class OnPagingConfirmUserChange(scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         metadata = json.loads(payload["view"]["private_metadata"])
 
@@ -352,6 +434,10 @@ class OnPagingConfirmUserChange(scenario_step.ScenarioStep):
             "submit_routing_uid": metadata["submit_routing_uid"],
             DataKey.USERS: metadata[DataKey.USERS],
         }
+        # keep predefined organization in private metadata
+        if "organization_id" in metadata:
+            private_metadata["organization_id"] = metadata["organization_id"]
+
         previous_view_payload = {
             "view": {
                 "state": metadata["state"],
@@ -389,7 +475,7 @@ def render_dialog(
     private_metadata = json.loads(payload["view"]["private_metadata"])
     submit_routing_uid = private_metadata.get("submit_routing_uid")
 
-    # Get organizations available to user
+    predefined_org = _get_predefined_org_from_private_metadata(private_metadata, slack_team_identity)
     available_organizations = _get_available_organizations(slack_team_identity, slack_user_identity)
 
     if initial:
@@ -397,15 +483,17 @@ def render_dialog(
         new_input_id_prefix = _generate_input_id_prefix()
         new_private_metadata = private_metadata
         new_private_metadata["input_id_prefix"] = new_input_id_prefix
-        selected_organization = available_organizations.first()
+        selected_organization = predefined_org if predefined_org else available_organizations.first()
         is_team_selected, selected_team = False, None
     else:
         # setup form using data/state
         old_input_id_prefix, new_input_id_prefix, new_private_metadata = _get_and_change_input_id_prefix_from_metadata(
             private_metadata
         )
-        selected_organization = _get_selected_org_from_payload(
-            payload, old_input_id_prefix, slack_team_identity, slack_user_identity
+        selected_organization = (
+            predefined_org
+            if predefined_org
+            else _get_selected_org_from_payload(payload, old_input_id_prefix, slack_team_identity, slack_user_identity)
         )
         is_team_selected, selected_team = _get_selected_team_from_payload(payload, old_input_id_prefix)
 
@@ -414,10 +502,16 @@ def render_dialog(
     if validation_errors:
         blocks += validation_errors
 
+    # get user in the context of the selected_organization
+    user = slack_user_identity.get_user(selected_organization)
+    if not user_is_authorized(user, FinishDirectPaging.REQUIRED_PERMISSIONS):
+        blocks += _get_unauthorized_warning()
+
     blocks.append(_get_message_input(payload))
 
-    # Add organization select if more than one organization available for user
-    if len(available_organizations) > 1:
+    # Add organization select if org is not defined on chatops-proxy (it's should happen only in OSS)
+    # and user has access to multiple orgs.
+    if not predefined_org and len(available_organizations) > 1:
         organization_select = _get_organization_select(
             available_organizations, selected_organization, new_input_id_prefix
         )
@@ -441,7 +535,22 @@ def render_dialog(
         }
     )
 
-    return _get_form_view(submit_routing_uid, blocks, json.dumps(new_private_metadata))
+    return _get_form_view(
+        submit_routing_uid, blocks, make_private_metadata(new_private_metadata, selected_organization)
+    )
+
+
+def _get_unauthorized_warning(error=False):
+    icon = ":warning:" if not error else ":no_entry:"
+    text = f"{icon} You do not have permission to perform this action."
+    if not error:
+        text += "\nAsk an admin to upgrade your permissions."
+    return [
+        typing.cast(
+            Block.Section,
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        )
+    ]
 
 
 def _get_form_view(routing_uid: str, blocks: Block.AnyBlocks, private_metadata: str) -> ModalView:
@@ -482,7 +591,7 @@ def _get_organization_select(
                     "text": f"{org.org_title} ({org.stack_slug})",
                     "emoji": True,
                 },
-                "value": f"{org.pk}",
+                "value": make_value({"id": org.pk}, org),
             }
         )
 
@@ -511,7 +620,7 @@ def _get_select_field_value(payload: EventPayload, prefix_id: str, routing_uid: 
         field = payload["view"]["state"]["values"][prefix_id + field_id][routing_uid]["selected_option"]
     except KeyError:
         return None
-    return field["value"] if field else None
+    return json.loads(field["value"])["id"] if field else None
 
 
 def _get_selected_org_from_payload(
@@ -528,6 +637,32 @@ def _get_selected_org_from_payload(
     if selected_org_id is None:
         return _get_available_organizations(slack_team_identity, slack_user_identity).first()
     return Organization.objects.filter(pk=selected_org_id).first()
+
+
+def _inject_predefined_org_to_private_metadata(
+    predefined_org: typing.Optional["Organization"], private_metadata: dict
+) -> dict:
+    """
+    Injects predefined organization to private metadata.
+    Predefined org is org defined by chatops-proxy for slash commands.
+    """
+    if predefined_org:
+        private_metadata["organization_id"] = predefined_org.pk
+    return private_metadata
+
+
+def _get_predefined_org_from_private_metadata(
+    private_metadata: dict,
+    slack_team_identity: "SlackTeamIdentity",
+) -> typing.Optional["Organization"]:
+    """
+    Returns organization from private metadata.
+    """
+    org_id = private_metadata.get("organization_id")
+    if not org_id:
+        return None
+
+    return slack_team_identity.organizations.filter(pk=org_id).first()
 
 
 def _get_team_select_blocks(
@@ -580,7 +715,7 @@ def _get_team_select_blocks(
                     "text": team_name,
                     "emoji": True,
                 },
-                "value": str(team_pk),
+                "value": make_value({"id": team_pk}, organization),
             }
         )
 
@@ -632,7 +767,7 @@ def _get_team_select_blocks(
 
 
 def _create_user_option_groups(
-    users: "RelatedManager['User']", max_options_per_group: int, option_group_label_text_prefix: str
+    organization, users: "RelatedManager['User']", max_options_per_group: int, option_group_label_text_prefix: str
 ) -> typing.List[CompositionObjectOptionGroup]:
     user_options: typing.List[CompositionObjectOption] = [
         {
@@ -641,7 +776,7 @@ def _create_user_option_groups(
                 "text": f"{user.name or user.username}",
                 "emoji": True,
             },
-            "value": f"{user.pk}",
+            "value": json.dumps({"id": user.pk}),
         }
         for user in users
     ]
@@ -664,6 +799,13 @@ def _create_user_option_groups(
                 "label": {"type": "plain_text", "text": label_text},
                 "options": group,
             }
+        )
+
+    # Only inject chatops-proxy metadata into the first dropdown option to reduce payload size
+    # so the 250kb Slack limit is not exceeded for orgs with many users
+    if option_groups:
+        option_groups[0]["options"][0]["value"] = make_value(
+            json.loads(option_groups[0]["options"][0]["value"]), organization
         )
 
     return option_groups
@@ -697,7 +839,7 @@ def _get_user_select_blocks(
     # selected items
     if selected_users := get_current_items(payload, DataKey.USERS, organization.users):
         blocks += [DIVIDER]
-        blocks += _get_selected_entries_list(input_id_prefix, DataKey.USERS, selected_users)
+        blocks += _get_selected_entries_list(organization, input_id_prefix, DataKey.USERS, selected_users)
         blocks += [DIVIDER]
 
     return blocks
@@ -710,10 +852,10 @@ def _get_users_select(
     oncall_user_pks = {user.pk for _, users in schedules.items() for user in users}
 
     oncall_user_option_groups = _create_user_option_groups(
-        organization.users.filter(pk__in=oncall_user_pks), max_options_per_group, "On-call now"
+        organization, organization.users.filter(pk__in=oncall_user_pks), max_options_per_group, "On-call now"
     )
     not_oncall_user_option_groups = _create_user_option_groups(
-        organization.users.exclude(pk__in=oncall_user_pks), max_options_per_group, "Not on-call"
+        organization, organization.users.exclude(pk__in=oncall_user_pks), max_options_per_group, "Not on-call"
     )
 
     if not oncall_user_option_groups and not not_oncall_user_option_groups:
@@ -737,7 +879,7 @@ def _get_users_select(
 
 
 def _get_selected_entries_list(
-    input_id_prefix: str, key: DataKey, entries: typing.List[typing.Tuple[Model, Policy]]
+    organization: "Organization", input_id_prefix: str, key: DataKey, entries: typing.List[typing.Tuple[Model, Policy]]
 ) -> typing.List[Block.Section]:
     current_entries: typing.List[Block.Section] = []
     for entry, policy in entries:
@@ -757,7 +899,10 @@ def _get_selected_entries_list(
                 "accessory": {
                     "type": "overflow",
                     "options": [
-                        {"text": {"type": "plain_text", "text": f"{label}"}, "value": f"{action}|{key}|{entry.pk}"}
+                        {
+                            "text": {"type": "plain_text", "text": f"{label}"},
+                            "value": make_value({"action": action, "key": key, "id": str(entry.pk)}, organization),
+                        }
                         for (action, label) in ITEM_ACTIONS
                     ],
                     "action_id": OnPagingItemActionChange.routing_uid(),
@@ -864,7 +1009,7 @@ def _get_available_organizations(
 
 def _generate_input_id_prefix() -> str:
     """
-    returns unique string to not to preserve input's values between view update
+    returns unique string to not preserve input's values between view update
 
     https://api.slack.com/methods/views.update#markdown
     """
@@ -903,8 +1048,8 @@ STEPS_ROUTING: ScenarioRoute.RoutingSteps = [
     },
     {
         "payload_type": PayloadType.SLASH_COMMAND,
-        "command_name": StartDirectPaging.command_name,
         "step": StartDirectPaging,
+        "matcher": StartDirectPaging.matcher,
     },
     {
         "payload_type": PayloadType.VIEW_SUBMISSION,

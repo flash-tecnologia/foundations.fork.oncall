@@ -1,19 +1,18 @@
 import React from 'react';
 
-import { Button, Checkbox, HorizontalGroup, Icon } from '@grafana/ui';
+import { Button, Checkbox, Icon, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
-import { observe } from 'mobx';
+import { Lambda, observe } from 'mobx';
 import { observer } from 'mobx-react';
-import { Lambda } from 'mobx/lib/internal';
 
-import GTable from 'components/GTable/GTable';
-import Text from 'components/Text/Text';
-import WithConfirm from 'components/WithConfirm/WithConfirm';
+import { GTable } from 'components/GTable/GTable';
+import { Text } from 'components/Text/Text';
+import { WithConfirm } from 'components/WithConfirm/WithConfirm';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
 import { GlobalSetting } from 'models/global_setting/global_setting.types';
 import { WithStoreProps } from 'state/types';
 import { withMobXProviderContext } from 'state/withStore';
-import { isUserActionAllowed, UserActions } from 'utils/authorization';
+import { isUserActionAllowed, UserActions } from 'utils/authorization/authorization';
 
 import { PLACEHOLDER } from './LiveSettings.config';
 import { normalizeValue, prepareForUpdate } from './LiveSettings.helpers';
@@ -115,10 +114,10 @@ class LiveSettings extends React.Component<LiveSettingsProps, LiveSettingsState>
           emptyText={data ? 'No variables found' : 'Loading...'}
           title={() => (
             <div className={cx('header')}>
-              <HorizontalGroup>
+              <Stack>
                 <Text.Title level={3}>Env Variables</Text.Title>
-              </HorizontalGroup>
-              <HorizontalGroup justify="flex-end">
+              </Stack>
+              <Stack justifyContent="flex-end">
                 <WithPermissionControlTooltip userAction={UserActions.OtherSettingsWrite}>
                   <Button
                     variant="primary"
@@ -128,7 +127,7 @@ class LiveSettings extends React.Component<LiveSettingsProps, LiveSettingsState>
                     {hideValues ? 'Show values' : 'Hide values'}
                   </Button>
                 </WithPermissionControlTooltip>
-              </HorizontalGroup>
+              </Stack>
             </div>
           )}
           rowKey="id"
@@ -217,8 +216,9 @@ class LiveSettings extends React.Component<LiveSettingsProps, LiveSettingsState>
     const { store } = this.props;
     const { globalSettingStore } = store;
 
-    return (value: string | boolean) => {
-      globalSettingStore.update(id, { name, value: prepareForUpdate(value) }).then(this.update);
+    return async (value: string | boolean) => {
+      await globalSettingStore.update(id, { name, value: prepareForUpdate(value) });
+      this.update();
     };
   };
 
@@ -240,8 +240,9 @@ class LiveSettings extends React.Component<LiveSettingsProps, LiveSettingsState>
     const { store } = this.props;
     const { globalSettingStore } = store;
 
-    return () => {
-      globalSettingStore.delete(item.id).then(this.update);
+    return async () => {
+      await globalSettingStore.delete(item.id);
+      this.update();
     };
   };
 }

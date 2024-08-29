@@ -5,6 +5,7 @@ import typing
 import pytz
 from celery import uuid as celery_uuid
 from dateutil.parser import parse
+from django.utils import timezone
 from django.utils.functional import cached_property
 from rest_framework.exceptions import ValidationError
 
@@ -41,60 +42,6 @@ class EscalationSnapshotMixin:
         """
         Builds new escalation chain in a json serializable format (dict).
         Use this method to prepare escalation chain data for saving to alert group before start new escalation.
-
-        Example result:
-        {
-            'channel_filter_snapshot': {
-                'id': 1,
-                'notify_in_slack': True,
-                'str_for_clients': 'default',
-                'notify_in_telegram': True
-            },
-            'escalation_chain_snapshot': {
-                'id': 1,
-                'name': 'Test'
-            },
-            'escalation_policies_snapshots': [
-                {
-                    'id': 1,
-                    'step': 14,
-                    'order': 0,
-                    'to_time': None,
-                    'from_time': None,
-                    'num_alerts_in_window': None,
-                    'num_minutes_in_window': None,
-                    'wait_delay': None,
-                    'notify_schedule': None,
-                    'notify_to_group': None,
-                    'passed_last_time': None,
-                    'escalation_counter': 0,
-                    'last_notified_user': None,
-                    'custom_button_trigger': None,
-                    'notify_to_users_queue': [1,2,3]
-                },
-                {
-                    'id': 2,
-                    'step': 0,
-                    'order': 1,
-                    'to_time': None,
-                    'from_time': None,
-                    'num_alerts_in_window': None,
-                    'num_minutes_in_window': None,
-                    'wait_delay': '00:05:00',
-                    'notify_schedule': None,
-                    'notify_to_group': None,
-                    'passed_last_time': None,
-                    'escalation_counter': 0,
-                    'last_notified_user': None,
-                    'custom_button_trigger': None,
-                    'notify_to_users_queue': []
-                },
-            ],
-            'slack_channel_id': 'SLACK_CHANNEL_ID',
-            'last_active_escalation_policy_order': None,
-            'pause_escalation': False,
-            'next_step_eta': '2021-10-18T10:28:28.890369Z
-        }
         """
         data = {}
 
@@ -213,6 +160,12 @@ class EscalationSnapshotMixin:
         return self.raw_escalation_snapshot.get("pause_escalation", False)
 
     @property
+    def last_active_escalation_policy_order(self) -> typing.Optional[int]:
+        if not self.raw_escalation_snapshot:
+            return None
+        return self.raw_escalation_snapshot.get("last_active_escalation_policy_order")
+
+    @property
     def next_step_eta(self) -> typing.Optional[datetime.datetime]:
         """
         get next_step_eta field directly to avoid serialization overhead
@@ -222,6 +175,19 @@ class EscalationSnapshotMixin:
 
         raw_next_step_eta = self.raw_escalation_snapshot.get("next_step_eta")
         return None if not raw_next_step_eta else parse(raw_next_step_eta).replace(tzinfo=pytz.UTC)
+
+    def next_step_eta_is_valid(self) -> typing.Optional[bool]:
+        """
+        `next_step_eta` should never be less than the current time (with a 5 minute buffer provided)
+        as this field should be updated as the escalation policy is executed over time. If it is, this means that
+        an escalation policy step has been missed, or is substantially delayed
+
+        if `next_step_eta` is `None` then `None` is returned, otherwise a boolean is returned
+        representing the result of the time comparision
+        """
+        if self.next_step_eta is None:
+            return None
+        return self.next_step_eta > (timezone.now() - datetime.timedelta(minutes=5))
 
     def update_next_step_eta(self, increase_by_timedelta: datetime.timedelta) -> typing.Optional[dict]:
         """

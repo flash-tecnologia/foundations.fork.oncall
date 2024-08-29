@@ -1,33 +1,33 @@
 import React from 'react';
 
-import { Button, HorizontalGroup, Icon, VerticalGroup } from '@grafana/ui';
+import { Button, Icon, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 
 import { TemplateForEdit } from 'components/AlertTemplates/CommonAlertTemplatesForm.config';
-import Block from 'components/GBlock/Block';
-import Text from 'components/Text/Text';
+import { Block } from 'components/GBlock/Block';
+import { Text } from 'components/Text/Text';
 import styles from 'containers/IntegrationTemplate/IntegrationTemplate.module.scss';
-import TemplatePreview, { TEMPLATE_PAGE } from 'containers/TemplatePreview/TemplatePreview';
-import { AlertReceiveChannel } from 'models/alert_receive_channel/alert_receive_channel.types';
-import { OutgoingWebhook } from 'models/outgoing_webhook/outgoing_webhook.types';
+import { TemplatePreview, TemplatePage } from 'containers/TemplatePreview/TemplatePreview';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { StackSize } from 'utils/consts';
 
 const cx = cn.bind(styles);
 
 interface ResultProps {
-  alertReceiveChannelId?: AlertReceiveChannel['id'];
-  outgoingWebhookId?: OutgoingWebhook['id'];
+  alertReceiveChannelId?: ApiSchemas['AlertReceiveChannel']['id'];
+  outgoingWebhookId?: ApiSchemas['Webhook']['id'];
   templateBody: string;
   template: TemplateForEdit;
   isAlertGroupExisting?: boolean;
   chatOpsPermalink?: string;
-  payload?: JSON;
+  payload?: { [key: string]: unknown };
   error?: string;
   onSaveAndFollowLink?: (link: string) => void;
   templateIsRoute?: boolean;
-  templatePage?: TEMPLATE_PAGE;
+  templatePage?: TemplatePage;
 }
 
-const TemplateResult = (props: ResultProps) => {
+export const TemplateResult = (props: ResultProps) => {
   const {
     alertReceiveChannelId,
     outgoingWebhookId,
@@ -38,19 +38,19 @@ const TemplateResult = (props: ResultProps) => {
     error,
     isAlertGroupExisting,
     onSaveAndFollowLink,
-    templatePage = TEMPLATE_PAGE.Integrations,
+    templatePage = TemplatePage.Integrations,
   } = props;
 
   return (
     <div className={cx('template-block-result')}>
       <div className={cx('template-block-title')}>
-        <HorizontalGroup justify="space-between">
+        <Stack justifyContent="space-between">
           <Text>Result</Text>
-        </HorizontalGroup>
+        </Stack>
       </div>
       <div className={cx('result')}>
         {payload || error ? (
-          <VerticalGroup spacing="lg">
+          <Stack direction="column" gap={StackSize.lg}>
             {error ? (
               <Block bordered fullWidth withBackground>
                 <Text>{error}</Text>
@@ -76,23 +76,23 @@ const TemplateResult = (props: ResultProps) => {
             )}
 
             {template?.additionalData?.chatOpsName && isAlertGroupExisting && (
-              <VerticalGroup>
+              <Stack direction="column">
                 <Button onClick={() => onSaveAndFollowLink(chatOpsPermalink)}>
-                  <HorizontalGroup spacing="xs" align="center">
+                  <Stack gap={StackSize.xs} alignItems="center">
                     Save and open Alert Group in {template.additionalData.chatOpsDisplayName}{' '}
                     <Icon name="external-link-alt" />
-                  </HorizontalGroup>
+                  </Stack>
                 </Button>
 
                 {template.additionalData.data && <Text type="secondary">{template.additionalData.data}</Text>}
-              </VerticalGroup>
+              </Stack>
             )}
-          </VerticalGroup>
+          </Stack>
         ) : (
           <div>
             <Block bordered fullWidth className={cx('block-style')} withBackground>
               <Text>
-                ← Select {templatePage === TEMPLATE_PAGE.Webhooks ? 'event' : 'alert group'} or "Use custom payload"
+                ← Select {templatePage === TemplatePage.Webhooks ? 'event' : 'alert group'} or "Use custom payload"
               </Text>
             </Block>
           </div>
@@ -101,5 +101,3 @@ const TemplateResult = (props: ResultProps) => {
     </div>
   );
 };
-
-export default TemplateResult;

@@ -1,32 +1,23 @@
-import React, { ChangeEvent, useCallback, useState } from 'react';
+import React, { ChangeEvent, useState } from 'react';
 
 import { ServiceLabels } from '@grafana/labels';
-import {
-  Alert,
-  Button,
-  Drawer,
-  Dropdown,
-  HorizontalGroup,
-  InlineSwitch,
-  Input,
-  Menu,
-  VerticalGroup,
-} from '@grafana/ui';
+import { Alert, Button, Drawer, Dropdown, InlineSwitch, Input, Menu, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 
-import Collapse from 'components/Collapse/Collapse';
-import MonacoEditor, { MONACO_LANGUAGE } from 'components/MonacoEditor/MonacoEditor';
-import PluginLink from 'components/PluginLink/PluginLink';
-import RenderConditionally from 'components/RenderConditionally/RenderConditionally';
-import Text from 'components/Text/Text';
-import IntegrationTemplate from 'containers/IntegrationTemplate/IntegrationTemplate';
-import { AlertReceiveChannel } from 'models/alert_receive_channel/alert_receive_channel.types';
+import { Collapse } from 'components/Collapse/Collapse';
+import { MonacoEditor, MonacoLanguage } from 'components/MonacoEditor/MonacoEditor';
+import { PluginLink } from 'components/PluginLink/PluginLink';
+import { RenderConditionally } from 'components/RenderConditionally/RenderConditionally';
+import { Text } from 'components/Text/Text';
+import { IntegrationTemplate } from 'containers/IntegrationTemplate/IntegrationTemplate';
+import { splitToGroups } from 'models/label/label.helpers';
 import { LabelsErrors } from 'models/label/label.types';
 import { ApiSchemas } from 'network/oncall-api/api.types';
+import { LabelTemplateOptions } from 'pages/integration/IntegrationCommon.config';
 import { useStore } from 'state/useStore';
-import { openErrorNotification } from 'utils';
-import { DOCS_ROOT } from 'utils/consts';
+import { DOCS_ROOT, GENERIC_ERROR, StackSize } from 'utils/consts';
+import { openErrorNotification } from 'utils/utils';
 
 import { getIsAddBtnDisabled, getIsTooManyLabelsWarningVisible } from './IntegrationLabelsForm.helpers';
 
@@ -37,13 +28,13 @@ const cx = cn.bind(styles);
 const INPUT_WIDTH = 280;
 
 interface IntegrationLabelsFormProps {
-  id: AlertReceiveChannel['id'];
+  id: ApiSchemas['AlertReceiveChannel']['id'];
   onSubmit: () => void;
   onHide: () => void;
-  onOpenIntegrationSettings: (id: AlertReceiveChannel['id']) => void;
+  onOpenIntegrationSettings: (id: ApiSchemas['AlertReceiveChannel']['id']) => void;
 }
 
-const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
+export const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
   const { id, onHide, onSubmit, onOpenIntegrationSettings } = props;
 
   const store = useStore();
@@ -61,7 +52,9 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
 
   const handleSave = async () => {
     try {
-      await alertReceiveChannelStore.saveAlertReceiveChannel(id, { alert_group_labels: alertGroupLabels });
+      await alertReceiveChannelStore.saveAlertReceiveChannel(id, {
+        alert_group_labels: alertGroupLabels,
+      });
       onSubmit();
       onHide();
     } catch (err) {
@@ -92,7 +85,7 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
         subtitle={
           <Text size="small" className="u-margin-top-xs">
             Combination of settings that manage the labeling of alert groups. More information in{' '}
-            <a href={DOCS_ROOT} target="_blank" rel="noreferrer">
+            <a href={`${DOCS_ROOT}/integrations/#alert-group-labels`} target="_blank" rel="noreferrer">
               <Text type="link">documentation</Text>
             </a>
             .
@@ -102,7 +95,7 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
         closeOnMaskClick={false}
         width="640px"
       >
-        <VerticalGroup spacing="lg">
+        <Stack direction="column" gap={StackSize.lg}>
           <RenderConditionally shouldRender={getIsTooManyLabelsWarningVisible(alertGroupLabels)}>
             <Alert title="More than 15 labels added" severity="warning">
               We support up to 15 labels per Alert group. Please remove extra labels.
@@ -110,10 +103,10 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
               Otherwise, only the first 15 labels (alphabetically sorted by keys) will be applied.
             </Alert>
           </RenderConditionally>
-          <VerticalGroup>
+          <Stack direction="column">
             <Text>Integration labels</Text>
             {alertReceiveChannel.labels.length ? (
-              <VerticalGroup spacing="xs">
+              <Stack direction="column" gap={StackSize.xs}>
                 <Text type="secondary" size="small">
                   Labels inherited from <PluginLink onClick={handleOpenIntegrationSettings}>the integration</PluginLink>
                   . This behavior can be disabled using the toggle option.
@@ -121,7 +114,7 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
                 <ul className={cx('labels-list')}>
                   {alertReceiveChannel.labels.map((label) => (
                     <li key={label.key.id}>
-                      <HorizontalGroup spacing="xs">
+                      <Stack gap={StackSize.xs}>
                         <Input width={INPUT_WIDTH / 8} value={label.key.name} disabled />
                         <Input width={INPUT_WIDTH / 8} value={label.value.name} disabled />
                         <InlineSwitch
@@ -129,20 +122,20 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
                           transparent
                           onChange={() => onInheritanceChange(label.key.id)}
                         />
-                      </HorizontalGroup>
+                      </Stack>
                     </li>
                   ))}
                 </ul>
-              </VerticalGroup>
+              </Stack>
             ) : (
-              <VerticalGroup>
+              <Stack direction="column">
                 <Text type="secondary">There are no labels to inherit yet</Text>
                 <Text type="link" onClick={handleOpenIntegrationSettings} clickable>
                   Add labels to the integration
                 </Text>
-              </VerticalGroup>
+              </Stack>
             )}
-          </VerticalGroup>
+          </Stack>
 
           <CustomLabels
             alertGroupLabels={alertGroupLabels}
@@ -155,8 +148,8 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
           />
 
           <Collapse isOpen={false} label="Multi-label extraction template" contentClassName="u-padding-top-none">
-            <VerticalGroup>
-              <HorizontalGroup justify="space-between" style={{ marginBottom: '10px' }} align="flex-end">
+            <Stack direction="column">
+              <Stack justifyContent="space-between" alignItems="flex-end">
                 <Text type="secondary" size="small" className="u-padding-left-lg">
                   Allows for the extraction and modification of multiple labels from the alert payload using a single
                   template. Supports not only dynamic values but also dynamic keys. The Jinja template must result in
@@ -169,45 +162,46 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
                     setShowTemplateEditor(true);
                   }}
                 />
-              </HorizontalGroup>
+              </Stack>
               <MonacoEditor
                 value={alertGroupLabels.template}
                 height="200px"
                 data={{}}
                 showLineNumbers={false}
-                language={MONACO_LANGUAGE.jinja2}
+                language={MonacoLanguage.jinja2}
                 onChange={(value) => {
                   setAlertGroupLabels({ ...alertGroupLabels, template: value });
                 }}
               />
-            </VerticalGroup>
+            </Stack>
           </Collapse>
 
           <div className={cx('buttons')}>
-            <HorizontalGroup justify="flex-end">
+            <Stack justifyContent="flex-end">
               <Button variant="secondary" onClick={onHide}>
                 Close
               </Button>
               <Button variant="primary" onClick={handleSave}>
                 Save
               </Button>
-            </HorizontalGroup>
+            </Stack>
           </div>
-        </VerticalGroup>
+        </Stack>
       </Drawer>
       {customLabelIndexToShowTemplateEditor !== undefined && (
         <IntegrationTemplate
           id={id}
           template={{
-            name: 'alert_group_labels',
-            displayName: ``,
+            name: LabelTemplateOptions.AlertGroupDynamicLabel.key,
+            displayName: LabelTemplateOptions.AlertGroupDynamicLabel.value,
           }}
           templates={templates}
           templateBody={alertGroupLabels.custom[customLabelIndexToShowTemplateEditor].value.name}
           onHide={() => setCustomLabelIndexToShowTemplateEditor(undefined)}
-          onUpdateTemplates={({ alert_group_labels }) => {
+          onUpdateTemplates={(templates) => {
             const newCustom = [...alertGroupLabels.custom];
-            newCustom[customLabelIndexToShowTemplateEditor].value.name = alert_group_labels;
+            newCustom[customLabelIndexToShowTemplateEditor].value.name =
+              templates[LabelTemplateOptions.AlertGroupDynamicLabel.key];
 
             setAlertGroupLabels({
               ...alertGroupLabels,
@@ -222,16 +216,16 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
         <IntegrationTemplate
           id={id}
           template={{
-            name: 'alert_group_labels',
-            displayName: ``,
+            name: LabelTemplateOptions.AlertGroupMultiLabel.key,
+            displayName: LabelTemplateOptions.AlertGroupMultiLabel.value,
           }}
           templates={templates}
           templateBody={alertGroupLabels.template}
           onHide={() => setShowTemplateEditor(false)}
-          onUpdateTemplates={({ alert_group_labels }) => {
+          onUpdateTemplates={(templates) => {
             setAlertGroupLabels({
               ...alertGroupLabels,
-              template: alert_group_labels,
+              template: templates[LabelTemplateOptions.AlertGroupMultiLabel.key],
             });
 
             setShowTemplateEditor(undefined);
@@ -243,9 +237,9 @@ const IntegrationLabelsForm = observer((props: IntegrationLabelsFormProps) => {
 });
 
 interface CustomLabelsProps {
-  alertGroupLabels: AlertReceiveChannel['alert_group_labels'];
+  alertGroupLabels: ApiSchemas['AlertReceiveChannel']['alert_group_labels'];
   customLabelsErrors: LabelsErrors;
-  onChange: (value: AlertReceiveChannel['alert_group_labels']) => void;
+  onChange: (value: ApiSchemas['AlertReceiveChannel']['alert_group_labels']) => void;
   onShowTemplateEditor: (index: number) => void;
 }
 
@@ -260,8 +254,8 @@ const CustomLabels = (props: CustomLabelsProps) => {
       custom: [
         ...alertGroupLabels.custom,
         {
-          key: { id: undefined, name: undefined },
-          value: { id: undefined, name: undefined },
+          key: { id: undefined, name: undefined, prescribed: false },
+          value: { id: undefined, name: undefined, prescribed: false },
         },
       ],
     });
@@ -272,46 +266,28 @@ const CustomLabels = (props: CustomLabelsProps) => {
       custom: [
         ...alertGroupLabels.custom,
         {
-          key: { id: undefined, name: undefined },
-          value: { id: null, name: undefined }, // id = null means it's a templated value
+          key: { id: undefined, name: undefined, prescribed: false },
+          value: { id: null, name: undefined, prescribed: false }, // id = null means it's a templated value
         },
       ],
     });
   };
 
-  const cachedOnLoadKeys = useCallback(() => {
-    let result = undefined;
-    return async (search?: string) => {
-      if (!result) {
-        try {
-          result = await labelsStore.loadKeys();
-        } catch (error) {
-          openErrorNotification('There was an error processing your request. Please try again');
-        }
-      }
+  const onLoadKeys = async (search?: string) => {
+    const result = await labelsStore.loadKeys(search);
+    return splitToGroups(result);
+  };
 
-      return result.filter((k) => k.name.toLowerCase().includes(search.toLowerCase()));
-    };
-  }, []);
-
-  const cachedOnLoadValuesForKey = useCallback(() => {
-    let result = undefined;
-    return async (key: string, search?: string) => {
-      if (!result) {
-        try {
-          const { values } = await labelsStore.loadValuesForKey(key, search);
-          result = values;
-        } catch (error) {
-          openErrorNotification('There was an error processing your request. Please try again');
-        }
-      }
-
-      return result.filter((k) => k.name.toLowerCase().includes(search.toLowerCase()));
-    };
-  }, []);
+  const onLoadValuesForKey = async (key: string, search?: string) => {
+    if (!key) {
+      return [];
+    }
+    const { values } = await labelsStore.loadValuesForKey(key, search);
+    return splitToGroups(values);
+  };
 
   return (
-    <VerticalGroup>
+    <Stack direction="column">
       <Text>Dynamic & Static labels</Text>
       <Text type="secondary" size="small">
         Dynamic: label values are extracted from the alert payload using Jinja. Keys remain static.
@@ -326,8 +302,8 @@ const CustomLabels = (props: CustomLabelsProps) => {
         inputWidth={INPUT_WIDTH}
         errors={customLabelsErrors}
         value={alertGroupLabels.custom}
-        onLoadKeys={cachedOnLoadKeys()}
-        onLoadValuesForKey={cachedOnLoadValuesForKey()}
+        onLoadKeys={onLoadKeys}
+        onLoadValuesForKey={onLoadValuesForKey}
         onCreateKey={labelsStore.createKey}
         onUpdateKey={labelsStore.updateKey}
         onCreateValue={labelsStore.createValue}
@@ -336,7 +312,7 @@ const CustomLabels = (props: CustomLabelsProps) => {
           if (res?.response?.status === 409) {
             openErrorNotification(`Duplicate values are not allowed`);
           } else {
-            openErrorNotification('An error has occurred. Please try again');
+            openErrorNotification(GENERIC_ERROR);
           }
         }}
         renderValue={(option, index, renderValueDefault) => {
@@ -375,6 +351,8 @@ const CustomLabels = (props: CustomLabelsProps) => {
             custom: value,
           });
         }}
+        getIsKeyEditable={(option) => !option.prescribed}
+        getIsValueEditable={(option) => !option.prescribed}
       />
       <Dropdown
         overlay={
@@ -388,8 +366,6 @@ const CustomLabels = (props: CustomLabelsProps) => {
           Add label
         </Button>
       </Dropdown>
-    </VerticalGroup>
+    </Stack>
   );
 };
-
-export default IntegrationLabelsForm;

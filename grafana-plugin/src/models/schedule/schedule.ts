@@ -1,13 +1,17 @@
 import dayjs from 'dayjs';
-import { action, observable } from 'mobx';
+import { action, makeObservable, observable, runInAction } from 'mobx';
 
+import { PageErrorData } from 'components/PageErrorHandlingWrapper/PageErrorHandlingWrapper';
+import { getWrongTeamResponseInfo } from 'components/PageErrorHandlingWrapper/PageErrorHandlingWrapper.helpers';
 import { RemoteFiltersType } from 'containers/RemoteFilters/RemoteFilters.types';
-import BaseStore from 'models/base_store';
+import { BaseStore } from 'models/base_store';
 import { EscalationChain } from 'models/escalation_chain/escalation_chain.types';
-import { User } from 'models/user/user.types';
-import { makeRequest } from 'network';
-import { RootStore } from 'state';
+import { ActionKey } from 'models/loader/action-keys';
+import { makeRequest } from 'network/network';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { RootStore } from 'state/rootStore';
 import { SelectOption } from 'state/types';
+import { AutoLoadingState } from 'utils/decorators';
 
 import {
   createShiftSwapEventFromShiftSwap,
@@ -17,6 +21,7 @@ import {
   fillGapsInShifts,
   flattenShiftEvents,
   getFromString,
+  getTotalDaysToDisplay,
   splitToLayers,
   splitToShifts,
   unFlattenShiftEvents,
@@ -30,9 +35,9 @@ import {
   Event,
   Layer,
   ShiftEvents,
-  RotationFormLiveParams,
   ScheduleScoreQualityResponse,
   ShiftSwap,
+  ScheduleView,
 } from './schedule.types';
 
 export class ScheduleStore extends BaseStore {
@@ -41,6 +46,9 @@ export class ScheduleStore extends BaseStore {
 
   @observable.shallow
   items: { [id: string]: Schedule } = {};
+
+  @observable
+  quality: ScheduleScoreQualityResponse;
 
   @observable.shallow
   shifts: { [id: string]: Shift } = {};
@@ -102,9 +110,6 @@ export class ScheduleStore extends BaseStore {
   overridePreview?: { [fromString: string]: ShiftEvents[] };
 
   @observable
-  rotationFormLiveParams: RotationFormLiveParams = undefined;
-
-  @observable
   scheduleToScheduleEvents: {
     [id: string]: ScheduleEvent[];
   } = {};
@@ -113,27 +118,42 @@ export class ScheduleStore extends BaseStore {
   byDayOptions: SelectOption[] = [];
 
   @observable
-  scheduleId: Schedule['id'];
+  refreshEventsError?: Partial<PageErrorData> = {
+    isWrongTeamError: false,
+    wrongTeamNoPermissions: false,
+  };
+
+  @observable
+  scheduleView = ScheduleView.OneWeek;
 
   constructor(rootStore: RootStore) {
     super(rootStore);
 
+    makeObservable(this);
+
     this.path = '/schedules/';
   }
 
-  @action
+  @action.bound
+  setScheduleView(value: ScheduleView) {
+    this.scheduleView = value;
+  }
+
+  @action.bound
   async loadItem(id: Schedule['id'], skipErrorHandling = false): Promise<Schedule> {
     const schedule = await this.getById(id, skipErrorHandling);
 
-    this.items = {
-      ...this.items,
-      [id]: schedule,
-    };
+    runInAction(() => {
+      this.items = {
+        ...this.items,
+        [id]: schedule,
+      };
+    });
 
     return schedule;
   }
 
-  @action
+  @action.bound
   async updateItems(
     f: RemoteFiltersType | string = { searchTerm: '', type: undefined, used: undefined },
     page = 1,
@@ -149,30 +169,33 @@ export class ScheduleStore extends BaseStore {
       return;
     }
 
-    this.items = {
-      ...this.items,
-      ...results.reduce(
-        (acc: { [key: number]: Schedule }, item: Schedule) => ({
-          ...acc,
-          [item.id]: item,
-        }),
-        {}
-      ),
-    };
-    this.searchResult = {
-      page_size,
-      count,
-      results: results.map((item: Schedule) => item.id),
-    };
+    runInAction(() => {
+      this.items = {
+        ...this.items,
+        ...results.reduce(
+          (acc: { [key: number]: Schedule }, item: Schedule) => ({
+            ...acc,
+            [item.id]: item,
+          }),
+          {}
+        ),
+      };
+      this.searchResult = {
+        page_size,
+        count,
+        results: results.map((item: Schedule) => item.id),
+      };
+    });
   }
 
+  @action.bound
   async updateItem(id: Schedule['id'], fromOrganization = false) {
     if (id) {
       let schedule;
       try {
         schedule = await this.getById(id, true, fromOrganization);
       } catch (error) {
-        if (error.response.data.error_code === 'wrong_team') {
+        if (error.response.data?.error_code === 'wrong_team') {
           schedule = {
             id,
             name: '🔒 Private schedule',
@@ -182,29 +205,37 @@ export class ScheduleStore extends BaseStore {
       }
 
       if (schedule) {
-        this.items = {
-          ...this.items,
-          [id]: schedule,
-        };
+        runInAction(() => {
+          this.items = {
+            ...this.items,
+            [id]: schedule,
+          };
+        });
       }
 
       return schedule;
     }
   }
 
-  getSearchResult() {
+  getSearchResult = () => {
     return {
       page_size: this.searchResult.page_size,
       count: this.searchResult.count,
       results: this.searchResult.results?.map((scheduleId: Schedule['id']) => this.items[scheduleId]),
     };
+  };
+
+  @action.bound
+  async getScoreQuality(scheduleId: Schedule['id']) {
+    const [quality] = await Promise.all([
+      makeRequest(`/schedules/${scheduleId}/quality`, { method: 'GET' }),
+      this.updateRelatedEscalationChains(scheduleId),
+    ]);
+    runInAction(() => {
+      this.quality = quality;
+    });
   }
 
-  async getScoreQuality(scheduleId: Schedule['id']): Promise<ScheduleScoreQualityResponse> {
-    return await makeRequest(`/schedules/${scheduleId}/quality`, { method: 'GET' });
-  }
-
-  @action
   async reloadIcal(scheduleId: Schedule['id']) {
     await makeRequest(`/schedules/${scheduleId}/reload_ical/`, {
       method: 'POST',
@@ -231,6 +262,7 @@ export class ScheduleStore extends BaseStore {
 
   // ------- NEW SCHEDULES API ENDPOINTS ---------
 
+  @action.bound
   async createRotation(scheduleId: Schedule['id'], isOverride: boolean, params: Partial<Shift>) {
     const type = isOverride ? 3 : 2;
 
@@ -239,16 +271,17 @@ export class ScheduleStore extends BaseStore {
       method: 'POST',
     });
 
-    this.shifts = {
-      ...this.shifts,
-      [response.id]: response,
-    };
+    await this.rootStore.scheduleStore.refreshEvents(scheduleId);
+    await this.getScoreQuality(scheduleId);
+
+    runInAction(() => {
+      this.shifts = {
+        ...this.shifts,
+        [response.id]: response,
+      };
+    });
 
     return response;
-  }
-
-  setRotationFormLiveParams(params: RotationFormLiveParams) {
-    this.rotationFormLiveParams = params;
   }
 
   async updateRotationPreview(
@@ -260,39 +293,43 @@ export class ScheduleStore extends BaseStore {
   ) {
     const type = isOverride ? 3 : 2;
 
+    const days = getTotalDaysToDisplay(this.scheduleView, this.rootStore.timezoneStore.calendarStartDate);
+
     const fromString = getFromString(startMoment);
 
     const dayBefore = startMoment.subtract(1, 'day');
 
     const response = await makeRequest(`/oncall_shifts/preview/`, {
-      params: { date: getFromString(dayBefore), days: 8 },
+      params: { date: getFromString(dayBefore), days },
       data: { type, schedule: scheduleId, shift_pk: shiftId === 'new' ? undefined : shiftId, ...params },
       method: 'POST',
     });
 
-    if (isOverride) {
-      const overridePreview = enrichOverrides(
-        [...(this.events[scheduleId]?.['override']?.[fromString] as Array<{ shiftId: string; events: Event[] }>)],
-        response.rotation,
-        shiftId
-      );
+    runInAction(() => {
+      if (isOverride) {
+        const overridePreview = enrichOverrides(
+          [...(this.events[scheduleId]?.['override']?.[fromString] as Array<{ shiftId: string; events: Event[] }>)],
+          response.rotation,
+          shiftId
+        );
 
-      this.overridePreview = { ...this.overridePreview, [fromString]: overridePreview };
-    } else {
-      const layers = enrichLayers(
-        [...(this.events[scheduleId]?.['rotation']?.[fromString] as Layer[])],
-        response.rotation,
-        shiftId,
-        params.priority_level
-      );
+        this.overridePreview = { ...this.overridePreview, [fromString]: overridePreview };
+      } else {
+        const layers = enrichLayers(
+          [...(this.events[scheduleId]?.['rotation']?.[fromString] as Layer[])],
+          response.rotation,
+          shiftId,
+          params.priority_level
+        );
 
-      this.rotationPreview = { ...this.rotationPreview, [fromString]: layers };
-    }
+        this.rotationPreview = { ...this.rotationPreview, [fromString]: layers };
+      }
 
-    this.finalPreview = { ...this.finalPreview, [fromString]: fillGapsInShifts(splitToShifts(response.final)) };
+      this.finalPreview = { ...this.finalPreview, [fromString]: fillGapsInShifts(splitToShifts(response.final)) };
+    });
   }
 
-  @action
+  @action.bound
   async updateShiftsSwapPreview(scheduleId: Schedule['id'], startMoment: dayjs.Dayjs, params: Partial<ShiftSwap>) {
     const fromString = getFromString(startMoment);
 
@@ -310,21 +347,23 @@ export class ScheduleStore extends BaseStore {
 
     const shiftEventsListFlattened = flattenShiftEvents([...existingShiftEventsList, newShiftEvents]);
 
-    this.shiftSwapsPreview = {
-      ...this.shiftSwapsPreview,
-      [fromString]: shiftEventsListFlattened,
-    };
+    runInAction(() => {
+      this.shiftSwapsPreview = {
+        ...this.shiftSwapsPreview,
+        [fromString]: shiftEventsListFlattened,
+      };
+    });
   }
 
-  @action
+  @action.bound
   clearPreview() {
     this.finalPreview = undefined;
     this.rotationPreview = undefined;
     this.overridePreview = undefined;
     this.shiftSwapsPreview = undefined;
-    this.rotationFormLiveParams = undefined;
   }
 
+  @action.bound
   async updateRotation(shiftId: Shift['id'], params: Partial<Shift>) {
     const response = await makeRequest(`/oncall_shifts/${shiftId}`, {
       params: { force: true },
@@ -332,54 +371,66 @@ export class ScheduleStore extends BaseStore {
       method: 'PUT',
     });
 
-    this.shifts = {
-      ...this.shifts,
-      [response.id]: response,
-    };
+    runInAction(() => {
+      this.shifts = {
+        ...this.shifts,
+        [response.id]: response,
+      };
+    });
 
     return response;
   }
 
+  @action.bound
   async updateRotationAsNew(shiftId: Shift['id'], params: Partial<Shift>) {
     const response = await makeRequest(`/oncall_shifts/${shiftId}`, {
       data: { ...params },
       method: 'PUT',
     });
 
-    this.shifts = {
-      ...this.shifts,
-      [response.id]: response,
-    };
+    runInAction(() => {
+      this.shifts = {
+        ...this.shifts,
+        [response.id]: response,
+      };
+    });
 
     return response;
   }
 
+  @action.bound
   updateRelatedEscalationChains = async (id: Schedule['id']) => {
     const response = await makeRequest(`/schedules/${id}/related_escalation_chains`, {
       method: 'GET',
     });
 
-    this.relatedEscalationChains = {
-      ...this.relatedEscalationChains,
-      [id]: response,
-    };
+    runInAction(() => {
+      this.relatedEscalationChains = {
+        ...this.relatedEscalationChains,
+        [id]: response,
+      };
+    });
 
     return response;
   };
 
+  @action.bound
   updateRelatedUsers = async (id: Schedule['id']) => {
     const { users } = await makeRequest(`/schedules/${id}/next_shifts_per_user`, {
       method: 'GET',
     });
 
-    this.relatedUsers = {
-      ...this.relatedUsers,
-      [id]: users,
-    };
+    runInAction(() => {
+      this.relatedUsers = {
+        ...this.relatedUsers,
+        [id]: users,
+      };
+    });
 
     return users;
   };
 
+  @action.bound
   async updateOncallShifts(scheduleId: Schedule['id']) {
     const { results } = await makeRequest(`/oncall_shifts/`, {
       params: {
@@ -388,19 +439,21 @@ export class ScheduleStore extends BaseStore {
       method: 'GET',
     });
 
-    this.shifts = {
-      ...this.shifts,
-      ...results.reduce(
-        (acc: { [key: number]: Shift }, item: Shift) => ({
-          ...acc,
-          [item.id]: item,
-        }),
-        {}
-      ),
-    };
+    runInAction(() => {
+      this.shifts = {
+        ...this.shifts,
+        ...results.reduce(
+          (acc: { [key: number]: Shift }, item: Shift) => ({
+            ...acc,
+            [item.id]: item,
+          }),
+          {}
+        ),
+      };
+    });
   }
 
-  @action
+  @action.bound
   async updateOncallShift(shiftId: Shift['id']) {
     if (this.shiftsCurrentlyUpdating[shiftId]) {
       return;
@@ -410,36 +463,45 @@ export class ScheduleStore extends BaseStore {
 
     const response = await makeRequest(`/oncall_shifts/${shiftId}`, {});
 
-    this.shifts = {
-      ...this.shifts,
-      [shiftId]: response,
-    };
+    runInAction(() => {
+      this.shifts = {
+        ...this.shifts,
+        [shiftId]: response,
+      };
+    });
 
     delete this.shiftsCurrentlyUpdating[shiftId];
 
     return response;
   }
 
-  @action
+  @action.bound
   async saveOncallShift(shiftId: Shift['id'], data: Partial<Shift>) {
     const response = await makeRequest(`/oncall_shifts/${shiftId}`, { method: 'PUT', data });
 
-    this.shifts = {
-      ...this.shifts,
-      [shiftId]: response,
-    };
+    runInAction(() => {
+      this.shifts = {
+        ...this.shifts,
+        [shiftId]: response,
+      };
+    });
 
     return response;
   }
 
   async deleteOncallShift(shiftId: Shift['id'], force?: boolean) {
-    return await makeRequest(`/oncall_shifts/${shiftId}`, {
-      method: 'DELETE',
-      params: { force },
-    }).catch(this.onApiError);
+    try {
+      return await makeRequest(`/oncall_shifts/${shiftId}`, {
+        method: 'DELETE',
+        params: { force },
+      });
+    } catch (err) {
+      this.onApiError(err);
+    }
   }
 
-  async updateEvents(scheduleId: Schedule['id'], startMoment: dayjs.Dayjs, type: RotationType = 'rotation', days = 9) {
+  @action.bound
+  async updateEvents(scheduleId: Schedule['id'], startMoment: dayjs.Dayjs, type: RotationType = 'rotation', days) {
     const dayBefore = startMoment.subtract(1, 'day');
 
     const response = await makeRequest(`/schedules/${scheduleId}/filter_events/`, {
@@ -457,16 +519,44 @@ export class ScheduleStore extends BaseStore {
     const shifts = fillGapsInShifts(shiftsUnflattened);
     const layers = type === 'rotation' ? splitToLayers(shifts) : undefined;
 
-    this.events = {
-      ...this.events,
-      [scheduleId]: {
-        ...this.events[scheduleId],
-        [type]: {
-          ...this.events[scheduleId]?.[type],
-          [fromString]: layers ? layers : shifts,
+    runInAction(() => {
+      this.events = {
+        ...this.events,
+        [scheduleId]: {
+          ...this.events[scheduleId],
+          [type]: {
+            ...this.events[scheduleId]?.[type],
+            [fromString]: layers || shifts,
+          },
         },
-      },
-    };
+      };
+    });
+  }
+
+  @action.bound
+  async refreshEvents(scheduleId: string, scheduleView?: ScheduleView) {
+    this.refreshEventsError = {};
+    const startMoment = this.rootStore.timezoneStore.calendarStartDate;
+
+    const days =
+      getTotalDaysToDisplay(scheduleView || this.scheduleView, this.rootStore.timezoneStore.calendarStartDate) + 2;
+
+    try {
+      const schedule = await this.loadItem(scheduleId);
+      this.rootStore.setPageTitle(schedule?.name);
+    } catch (error) {
+      runInAction(() => {
+        this.refreshEventsError = getWrongTeamResponseInfo(error);
+      });
+    }
+
+    this.updateRelatedUsers(scheduleId); // to refresh related users
+    await Promise.all([
+      this.updateEvents(scheduleId, startMoment, 'rotation', days),
+      this.updateEvents(scheduleId, startMoment, 'override', days),
+      this.updateEvents(scheduleId, startMoment, 'final', days),
+      this.updateShiftSwaps(scheduleId, startMoment),
+    ]);
   }
 
   async updateFrequencyOptions() {
@@ -475,34 +565,57 @@ export class ScheduleStore extends BaseStore {
     });
   }
 
+  @action.bound
   async updateDaysOptions() {
-    this.byDayOptions = await makeRequest(`/oncall_shifts/days_options/`, {
+    const result = await makeRequest(`/oncall_shifts/days_options/`, {
       method: 'GET',
+    });
+
+    runInAction(() => {
+      this.byDayOptions = result;
     });
   }
 
   async createShiftSwap(params: Partial<ShiftSwap>) {
-    return await makeRequest(`/shift_swaps/`, { method: 'POST', data: params }).catch(this.onApiError);
+    try {
+      return await makeRequest(`/shift_swaps/`, { method: 'POST', data: params });
+    } catch (err) {
+      this.onApiError(err);
+    }
   }
 
   async deleteShiftSwap(shiftSwapId: ShiftSwap['id']) {
-    return await makeRequest(`/shift_swaps/${shiftSwapId}`, { method: 'DELETE' }).catch(this.onApiError);
+    try {
+      return await makeRequest(`/shift_swaps/${shiftSwapId}`, { method: 'DELETE' });
+    } catch (err) {
+      this.onApiError(err);
+    }
   }
 
   async takeShiftSwap(shiftSwapId: ShiftSwap['id']) {
-    return await makeRequest(`/shift_swaps/${shiftSwapId}/take`, { method: 'POST' }).catch(this.onApiError);
+    try {
+      return await makeRequest(`/shift_swaps/${shiftSwapId}/take`, { method: 'POST' });
+    } catch (err) {
+      this.onApiError(err);
+    }
   }
 
+  @action.bound
   async loadShiftSwap(id: ShiftSwap['id']) {
     const result = await makeRequest(`/shift_swaps/${id}`, { params: { expand_users: true } });
 
-    this.shiftSwaps = { ...this.shiftSwaps, [id]: result };
+    runInAction(() => {
+      this.shiftSwaps = { ...this.shiftSwaps, [id]: result };
+    });
 
     return result;
   }
 
-  async updateShiftSwaps(scheduleId: Schedule['id'], startMoment: dayjs.Dayjs, days = 9) {
+  @action.bound
+  async updateShiftSwaps(scheduleId: Schedule['id'], startMoment: dayjs.Dayjs) {
     const fromString = getFromString(startMoment);
+
+    const days = getTotalDaysToDisplay(this.scheduleView, this.rootStore.timezoneStore.calendarStartDate) + 2;
 
     const dayBefore = startMoment.subtract(1, 'day');
 
@@ -522,25 +635,31 @@ export class ScheduleStore extends BaseStore {
 
     const shiftEventsListFlattened = flattenShiftEvents(shiftEventsList);
 
-    this.shiftSwaps = result.shift_swaps.reduce(
-      (memo, shiftSwap) => ({
-        ...memo,
-        [shiftSwap.id]: shiftSwap,
-      }),
-      this.shiftSwaps
-    );
+    runInAction(() => {
+      this.shiftSwaps = result.shift_swaps.reduce(
+        (memo, shiftSwap) => ({
+          ...memo,
+          [shiftSwap.id]: shiftSwap,
+        }),
+        this.shiftSwaps
+      );
 
-    this.scheduleAndDateToShiftSwaps = {
-      ...this.scheduleAndDateToShiftSwaps,
-      [scheduleId]: {
-        ...this.scheduleAndDateToShiftSwaps[scheduleId],
-        [fromString]: shiftEventsListFlattened,
-      },
-    };
+      this.scheduleAndDateToShiftSwaps = {
+        ...this.scheduleAndDateToShiftSwaps,
+        [scheduleId]: {
+          ...this.scheduleAndDateToShiftSwaps[scheduleId],
+          [fromString]: shiftEventsListFlattened,
+        },
+      };
+    });
   }
 
-  async updatePersonalEvents(userPk: User['pk'], startMoment: dayjs.Dayjs, days = 9, isUpdateOnCallNow = false) {
+  @AutoLoadingState(ActionKey.UPDATE_PERSONAL_EVENTS)
+  @action.bound
+  async updatePersonalEvents(userPk: ApiSchemas['User']['pk'], startMoment: dayjs.Dayjs, isUpdateOnCallNow = false) {
     const fromString = getFromString(startMoment);
+
+    const days = getTotalDaysToDisplay(ScheduleView.OneWeek, this.rootStore.timezoneStore.calendarStartDate) + 2;
 
     const dayBefore = startMoment.subtract(1, 'day');
 
@@ -558,20 +677,22 @@ export class ScheduleStore extends BaseStore {
 
     const shiftEventsListFlattened = flattenShiftEvents(shiftEventsList);
 
-    this.personalEvents = {
-      ...this.personalEvents,
-      [userPk]: {
-        ...this.personalEvents[userPk],
-        [fromString]: shiftEventsListFlattened,
-      },
-    };
-
-    if (isUpdateOnCallNow) {
-      // since current endpoint works incorrectly we are waiting for https://github.com/grafana/oncall/issues/3164
-      this.onCallNow = {
-        ...this.onCallNow,
-        [userPk]: is_oncall,
+    runInAction(() => {
+      this.personalEvents = {
+        ...this.personalEvents,
+        [userPk]: {
+          ...this.personalEvents[userPk],
+          [fromString]: shiftEventsListFlattened,
+        },
       };
-    }
+
+      if (isUpdateOnCallNow) {
+        // since current endpoint works incorrectly we are waiting for https://github.com/grafana/oncall/issues/3164
+        this.onCallNow = {
+          ...this.onCallNow,
+          [userPk]: is_oncall,
+        };
+      }
+    });
   }
 }

@@ -12,7 +12,12 @@ from django.utils import timezone
 from firebase_admin.messaging import APNSPayload, Aps, ApsAlert, CriticalSound, Message
 
 from apps.mobile_app.types import FCMMessageData, MessageType, Platform
-from apps.mobile_app.utils import MAX_RETRIES, construct_fcm_message, send_push_notification
+from apps.mobile_app.utils import (
+    MAX_RETRIES,
+    add_stack_slug_to_message_title,
+    construct_fcm_message,
+    send_push_notification,
+)
 from apps.schedules.models.on_call_schedule import OnCallSchedule, ScheduleEvent
 from apps.user_management.models import User
 from common.cache import ensure_cache_key_allocates_to_the_same_hash_slot
@@ -28,7 +33,12 @@ logger.setLevel(logging.DEBUG)
 
 
 def _get_notification_title(seconds_until_going_oncall: int) -> str:
-    return f"Your on-call shift starts in {humanize.naturaldelta(seconds_until_going_oncall)}"
+    from apps.mobile_app.models import MobileAppUserSettings
+
+    rounded_seconds = min(
+        MobileAppUserSettings.ALL_NOTIFICATION_TIMING_CHOICES_SECONDS, key=lambda x: abs(x - seconds_until_going_oncall)
+    )
+    return f"Your on-call shift starts in {humanize.naturaldelta(rounded_seconds)}"
 
 
 def _get_notification_subtitle(
@@ -72,8 +82,9 @@ def _get_fcm_message(
     notification_subtitle = _get_notification_subtitle(schedule, schedule_event, mobile_app_user_settings)
 
     data: FCMMessageData = {
-        "title": notification_title,
+        "title": add_stack_slug_to_message_title(notification_title, user.organization),
         "subtitle": notification_subtitle,
+        "orgName": user.organization.stack_slug,
         "info_notification_sound_name": mobile_app_user_settings.get_notification_sound_name(
             MessageType.INFO, Platform.ANDROID
         ),
@@ -85,7 +96,7 @@ def _get_fcm_message(
     apns_payload = APNSPayload(
         aps=Aps(
             thread_id=thread_id,
-            alert=ApsAlert(title=notification_title, subtitle=notification_subtitle),
+            alert=ApsAlert(title=notification_title, body=notification_subtitle),
             sound=CriticalSound(
                 critical=False,
                 name=mobile_app_user_settings.get_notification_sound_name(MessageType.INFO, Platform.IOS),
@@ -245,5 +256,5 @@ def conditionally_send_going_oncall_push_notifications_for_schedule(schedule_pk)
 
 @shared_dedicated_queue_retry_task()
 def conditionally_send_going_oncall_push_notifications_for_all_schedules() -> None:
-    for schedule in OnCallSchedule.objects.all():
+    for schedule in OnCallSchedule.objects.filter(organization__deleted_at__isnull=True):
         conditionally_send_going_oncall_push_notifications_for_schedule.apply_async((schedule.pk,))

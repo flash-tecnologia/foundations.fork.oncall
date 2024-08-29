@@ -1,11 +1,11 @@
-import 'jest/matchMedia.ts';
+import 'jest/matchMedia';
 import React from 'react';
 
 import { render, fireEvent, screen } from '@testing-library/react';
 
-import Collapse, { CollapseProps } from 'components/Collapse/Collapse';
+import { Collapse, CollapseProps } from 'components/Collapse/Collapse';
 
-describe.skip('Collapse', () => {
+describe('Collapse', () => {
   function getProps(isOpen: boolean, onClick: jest.Mock = jest.fn()) {
     return {
       label: 'Toggle',

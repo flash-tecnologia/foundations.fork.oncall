@@ -1,5 +1,4 @@
-import datetime
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from django.core.cache import cache
@@ -10,7 +9,13 @@ from rest_framework.response import Response
 from rest_framework.test import APIClient
 
 from apps.alerts.constants import ActionSource
-from apps.alerts.models import AlertGroup, AlertGroupLogRecord, ResolutionNote
+from apps.alerts.models import (
+    AlertGroup,
+    AlertGroupExternalID,
+    AlertGroupLogRecord,
+    AlertReceiveChannel,
+    ResolutionNote,
+)
 from apps.alerts.paging import direct_paging
 from apps.alerts.tasks import wipe
 from apps.api.errors import AlertGroupAPIError
@@ -18,6 +23,7 @@ from apps.api.permissions import LegacyAccessControlRole
 from apps.api.serializers.alert import AlertFieldsCacheSerializerMixin
 from apps.api.serializers.alert_group import AlertGroupFieldsCacheSerializerMixin
 from apps.base.models import UserNotificationPolicyLogRecord
+from common.api_helpers.filters import DateRangeFilterMixin
 
 alert_raw_request_data = {
     "evalMatches": [
@@ -104,7 +110,7 @@ def test_get_filter_started_at(alert_group_internal_api_setup, make_user_auth_he
 
     url = reverse("api-internal:alertgroup-list")
     response = client.get(
-        url + "?started_at=1970-01-01T00:00:00/2099-01-01T23:59:59",
+        url + "?started_at=1970-01-01T00:00:00_2099-01-01T23:59:59",
         format="json",
         **make_user_auth_headers(user, token),
     )
@@ -120,7 +126,7 @@ def test_get_filter_resolved_at_alertgroup_empty_result(alert_group_internal_api
 
     url = reverse("api-internal:alertgroup-list")
     response = client.get(
-        url + "?resolved_at=1970-01-01T00:00:00/1970-01-01T23:59:59",
+        url + "?resolved_at=1970-01-01T00:00:00_1970-01-01T23:59:59",
         format="json",
         **make_user_auth_headers(user, token),
     )
@@ -147,7 +153,7 @@ def test_get_filter_resolved_at(alert_group_internal_api_setup, make_user_auth_h
 
     url = reverse("api-internal:alertgroup-list")
     response = client.get(
-        url + "?resolved_at=1970-01-01T00:00:00/2099-01-01T23:59:59",
+        url + "?resolved_at=1970-01-01T00:00:00_2099-01-01T23:59:59",
         format="json",
         **make_user_auth_headers(user, token),
     )
@@ -243,8 +249,8 @@ def test_get_filter_resolved_by(
     resolved_alert_group = make_alert_group(
         alert_receive_channel,
         channel_filter=default_channel_filter,
-        acknowledged_at=timezone.now() + datetime.timedelta(hours=1),
-        resolved_at=timezone.now() + datetime.timedelta(hours=2),
+        acknowledged_at=timezone.now() + timezone.timedelta(hours=1),
+        resolved_at=timezone.now() + timezone.timedelta(hours=2),
         resolved=True,
         acknowledged=True,
         resolved_by_user=first_user,
@@ -295,8 +301,8 @@ def test_get_filter_resolved_by_multiple_values(
         resolved_alert_group = make_alert_group(
             alert_receive_channel,
             channel_filter=default_channel_filter,
-            acknowledged_at=timezone.now() + datetime.timedelta(hours=1),
-            resolved_at=timezone.now() + datetime.timedelta(hours=2),
+            acknowledged_at=timezone.now() + timezone.timedelta(hours=1),
+            resolved_at=timezone.now() + timezone.timedelta(hours=2),
             resolved=True,
             acknowledged=True,
             resolved_by_user=user,
@@ -341,8 +347,8 @@ def test_get_filter_acknowledged_by(
     acknowledged_alert_group = make_alert_group(
         alert_receive_channel,
         channel_filter=default_channel_filter,
-        acknowledged_at=timezone.now() + datetime.timedelta(hours=1),
-        resolved_at=timezone.now() + datetime.timedelta(hours=2),
+        acknowledged_at=timezone.now() + timezone.timedelta(hours=1),
+        resolved_at=timezone.now() + timezone.timedelta(hours=2),
         acknowledged=True,
         acknowledged_by_user=first_user,
     )
@@ -391,8 +397,8 @@ def test_get_filter_acknowledged_by_multiple_values(
         acknowledged_alert_group = make_alert_group(
             alert_receive_channel,
             channel_filter=default_channel_filter,
-            acknowledged_at=timezone.now() + datetime.timedelta(hours=1),
-            resolved_at=timezone.now() + datetime.timedelta(hours=2),
+            acknowledged_at=timezone.now() + timezone.timedelta(hours=1),
+            resolved_at=timezone.now() + timezone.timedelta(hours=2),
             acknowledged=True,
             acknowledged_by_user=user,
         )
@@ -435,7 +441,7 @@ def test_get_filter_silenced_by(
     silenced_alert_group = make_alert_group(
         alert_receive_channel,
         channel_filter=default_channel_filter,
-        silenced_at=timezone.now() + datetime.timedelta(hours=1),
+        silenced_at=timezone.now() + timezone.timedelta(hours=1),
         silenced=True,
         silenced_by_user=first_user,
     )
@@ -484,7 +490,7 @@ def test_get_filter_silenced_by_multiple_values(
         acknowledged_alert_group = make_alert_group(
             alert_receive_channel,
             channel_filter=default_channel_filter,
-            silenced_at=timezone.now() + datetime.timedelta(hours=1),
+            silenced_at=timezone.now() + timezone.timedelta(hours=1),
             silenced=True,
             silenced_by_user=user,
         )
@@ -663,8 +669,8 @@ def test_get_filter_mine(
     acknowledged_alert_group = make_alert_group(
         alert_receive_channel,
         channel_filter=default_channel_filter,
-        acknowledged_at=timezone.now() + datetime.timedelta(hours=1),
-        resolved_at=timezone.now() + datetime.timedelta(hours=2),
+        acknowledged_at=timezone.now() + timezone.timedelta(hours=1),
+        resolved_at=timezone.now() + timezone.timedelta(hours=2),
         acknowledged=True,
         acknowledged_by_user=first_user,
     )
@@ -717,8 +723,8 @@ def test_get_filter_involved_users(
     acknowledged_alert_group = make_alert_group(
         alert_receive_channel,
         channel_filter=default_channel_filter,
-        acknowledged_at=timezone.now() + datetime.timedelta(hours=1),
-        resolved_at=timezone.now() + datetime.timedelta(hours=2),
+        acknowledged_at=timezone.now() + timezone.timedelta(hours=1),
+        resolved_at=timezone.now() + timezone.timedelta(hours=2),
         acknowledged=True,
         acknowledged_by_user=first_user,
     )
@@ -967,6 +973,62 @@ def test_get_filter_labels(
     assert response.status_code == status.HTTP_200_OK
     assert len(response.json()["results"]) == 1
     assert response.json()["results"][0]["pk"] == alert_groups[0].public_primary_key
+
+
+@pytest.mark.django_db
+def test_get_title_search(
+    settings,
+    make_organization_and_user_with_plugin_token,
+    make_alert_receive_channel,
+    make_channel_filter,
+    make_alert_group,
+    make_alert,
+    make_user_auth_headers,
+):
+    settings.FEATURE_ALERT_GROUP_SEARCH_ENABLED = True
+    settings.FEATURE_ALERT_GROUP_SEARCH_CUTOFF_DAYS = 30
+    organization, user, token = make_organization_and_user_with_plugin_token()
+
+    alert_receive_channel = make_alert_receive_channel(organization)
+    channel_filter = make_channel_filter(alert_receive_channel, is_default=True)
+
+    alert_groups = []
+    for i in range(3):
+        alert_group = make_alert_group(
+            alert_receive_channel, channel_filter=channel_filter, web_title_cache=f"testing {i+1}"
+        )
+        # alert groups starting every months going back
+        alert_group.started_at = timezone.now() - timezone.timedelta(days=10 + 30 * i)
+        alert_group.save(update_fields=["started_at"])
+        make_alert(alert_group=alert_group, raw_request_data=alert_raw_request_data)
+        alert_groups.append(alert_group)
+
+    client = APIClient()
+    url = reverse("api-internal:alertgroup-list")
+
+    # check that the search returns alert groups started in the last 30 days
+    response = client.get(
+        url + "?search=testing",
+        format="json",
+        **make_user_auth_headers(user, token),
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert len(response.json()["results"]) == 1
+    assert response.json()["results"][0]["pk"] == alert_groups[0].public_primary_key
+
+    # check that the search returns alert groups started in the last 30 days of specified date range
+    response = client.get(
+        url
+        + "?search=testing&started_at={}_{}".format(
+            (timezone.now() - timezone.timedelta(days=500)).strftime(DateRangeFilterMixin.DATE_FORMAT),
+            (timezone.now() - timezone.timedelta(days=30)).strftime(DateRangeFilterMixin.DATE_FORMAT),
+        ),
+        format="json",
+        **make_user_auth_headers(user, token),
+    )
+    assert response.status_code == status.HTTP_200_OK
+    assert len(response.json()["results"]) == 1
+    assert response.json()["results"][0]["pk"] == alert_groups[1].public_primary_key
 
 
 @pytest.mark.django_db
@@ -1415,6 +1477,41 @@ def test_alert_group_detail_permissions(
 
     with patch(
         "apps.api.views.alert_group.AlertGroupView.retrieve",
+        return_value=Response(
+            status=status.HTTP_200_OK,
+        ),
+    ):
+        response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == expected_status
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "role,expected_status",
+    [
+        (LegacyAccessControlRole.ADMIN, status.HTTP_200_OK),
+        (LegacyAccessControlRole.EDITOR, status.HTTP_200_OK),
+        (LegacyAccessControlRole.VIEWER, status.HTTP_200_OK),
+        (LegacyAccessControlRole.NONE, status.HTTP_403_FORBIDDEN),
+    ],
+)
+def test_alert_group_escalation_snapshot_permissions(
+    alert_group_internal_api_setup,
+    make_user_for_organization,
+    make_user_auth_headers,
+    role,
+    expected_status,
+):
+    _, token, alert_groups = alert_group_internal_api_setup
+    _, _, new_alert_group, _ = alert_groups
+    organization = new_alert_group.channel.organization
+    user = make_user_for_organization(organization, role)
+
+    client = APIClient()
+    url = reverse("api-internal:alertgroup-escalation-snapshot", kwargs={"pk": new_alert_group.public_primary_key})
+
+    with patch(
+        "apps.api.views.alert_group.AlertGroupView.escalation_snapshot",
         return_value=Response(
             status=status.HTTP_200_OK,
         ),
@@ -1884,7 +1981,7 @@ def test_alert_group_preview_body_non_existent_template_var(
 
     # Return errors as preview body instead of None
     assert response.status_code == status.HTTP_200_OK
-    assert response.json()["preview"] == "Template Warning: &#x27;foobar&#x27; is undefined"
+    assert response.json()["preview"] == "Template Warning: 'foobar' is undefined"
 
 
 @pytest.mark.django_db
@@ -1907,7 +2004,7 @@ def test_alert_group_preview_body_invalid_template_syntax(
 
     # Errors now returned preview content
     assert response.status_code == status.HTTP_200_OK
-    assert response.data["preview"] == "Template Error: No test named &#x27;None&#x27; found."
+    assert response.data["preview"] == "Template Error: No test named 'None' found."
 
 
 @pytest.mark.django_db
@@ -1986,7 +2083,7 @@ def test_alert_group_paged_users(
     assert response.json()["paged_users"] == [
         {
             "avatar": user2.avatar_url,
-            "avatar_full": user2.avatar_full_url,
+            "avatar_full": user2.avatar_full_url(user.organization),
             "id": user2.pk,
             "pk": user2.public_primary_key,
             "important": None,
@@ -2114,8 +2211,8 @@ def test_timeline_api_action(
     alert_group = make_alert_group(alert_receive_channel, channel_filter=channel_filter)
     make_alert(alert_group=alert_group, raw_request_data=alert_raw_request_data)
 
-    alert_group.acknowledge_by_user(user, action_source=ActionSource.WEB)
-    alert_group.resolve_by_user(user, action_source=ActionSource.API)
+    alert_group.acknowledge_by_user_or_backsync(user, action_source=ActionSource.WEB)
+    alert_group.resolve_by_user_or_backsync(user, action_source=ActionSource.API)
 
     client = APIClient()
     url = reverse("api-internal:alertgroup-detail", kwargs={"pk": alert_group.public_primary_key})
@@ -2208,3 +2305,42 @@ def test_alert_group_list_labels(
     assert response.json()["results"][-1]["labels"] == [
         {"key": {"id": "a", "name": "a"}, "value": {"id": "b", "name": "b"}}
     ]
+
+
+@pytest.mark.django_db
+def test_alert_group_external_urls(
+    make_organization_and_user_with_plugin_token,
+    make_user_auth_headers,
+    make_alert_receive_channel,
+    make_alert_receive_channel_connection,
+    make_alert_group,
+):
+    client = APIClient()
+
+    integration_config = AlertReceiveChannel._config[0]
+    integration_config.get_url = Mock(return_value="https://some-url")
+
+    organization, user, token = make_organization_and_user_with_plugin_token()
+    source_alert_receive_channel = make_alert_receive_channel(organization, integration=integration_config.slug)
+    alert_receive_channel = make_alert_receive_channel(organization)
+    make_alert_receive_channel_connection(source_alert_receive_channel, alert_receive_channel)
+
+    alert_group = make_alert_group(alert_receive_channel)
+
+    url = reverse("api-internal:alertgroup-detail", kwargs={"pk": alert_group.public_primary_key})
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.json()["external_urls"] == []
+
+    # create external IDs
+    external_id = AlertGroupExternalID.objects.create(
+        source_alert_receive_channel=source_alert_receive_channel, alert_group=alert_group, value="test123"
+    )
+    url = reverse("api-internal:alertgroup-detail", kwargs={"pk": alert_group.public_primary_key})
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    expected = {
+        "integration": source_alert_receive_channel.public_primary_key,
+        "integration_type": source_alert_receive_channel.integration,
+        "external_id": external_id.value,
+        "url": "https://some-url",
+    }
+    assert response.json()["external_urls"] == [expected]

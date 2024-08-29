@@ -2,14 +2,18 @@ import datetime
 import logging
 import typing
 
+from django.conf import settings
 from django.core.cache import cache
+from django.db.models import Prefetch
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema_field, inline_serializer
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.alerts.incident_appearance.renderers.web_renderer import AlertGroupWebRenderer
 from apps.alerts.models import AlertGroup
 from apps.alerts.models.alert_group import PagedUser
+from apps.slack.models import SlackMessage
+from apps.telegram.models import TelegramMessage
 from common.api_helpers.custom_fields import TeamPrimaryKeyRelatedField
 from common.api_helpers.mixins import EagerLoadingMixin
 
@@ -20,6 +24,24 @@ from .user import FastUserSerializer, UserShortSerializer
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+
+class ExternalURL(typing.TypedDict):
+    integration: str
+    integration_type: str
+    external_id: str
+    url: str
+
+
+class RenderForWeb(typing.TypedDict):
+    title: str
+    message: str
+    image_url: str | None
+    source_link: str | None
+
+
+class EmptyRenderForWeb(typing.TypedDict):
+    pass
 
 
 class AlertGroupFieldsCacheSerializerMixin(AlertsFieldCacheBusterMixin):
@@ -80,18 +102,7 @@ class ShortAlertGroupSerializer(AlertGroupFieldsCacheSerializerMixin, serializer
         fields = ["pk", "render_for_web", "alert_receive_channel", "inside_organization_number"]
         read_only_fields = ["pk", "render_for_web", "alert_receive_channel", "inside_organization_number"]
 
-    @extend_schema_field(
-        inline_serializer(
-            name="render_for_web",
-            fields={
-                "title": serializers.CharField(),
-                "message": serializers.CharField(),
-                "image_url": serializers.CharField(),
-                "source_link": serializers.CharField(),
-            },
-        )
-    )
-    def get_render_for_web(self, obj: "AlertGroup"):
+    def get_render_for_web(self, obj: "AlertGroup") -> RenderForWeb | EmptyRenderForWeb:
         last_alert = obj.alerts.last()
         if last_alert is None:
             return {}
@@ -122,11 +133,26 @@ class AlertGroupListSerializer(
 
     labels = AlertGroupLabelSerializer(many=True, read_only=True)
 
-    PREFETCH_RELATED = [
+    PREFETCH_RELATED: list[str | Prefetch] = [
         "dependent_alert_groups",
         "log_records__author",
         "labels",
     ]
+    if settings.ALERT_GROUP_LIST_TRY_PREFETCH:
+        PREFETCH_RELATED += [
+            Prefetch(
+                "slack_messages",
+                queryset=SlackMessage.objects.select_related("_slack_team_identity").order_by("created_at")[:1],
+                to_attr="prefetched_slack_messages",
+            ),
+            Prefetch(
+                "telegram_messages",
+                queryset=TelegramMessage.objects.filter(
+                    chat_id__startswith="-", message_type=TelegramMessage.ALERT_GROUP_MESSAGE
+                ).order_by("id")[:1],
+                to_attr="prefetched_telegram_messages",
+            ),
+        ]
 
     SELECT_RELATED = [
         "channel__organization",
@@ -168,20 +194,10 @@ class AlertGroupListSerializer(
             "team",
             "grafana_incident_id",
             "labels",
+            "permalinks",
         ]
 
-    @extend_schema_field(
-        inline_serializer(
-            name="render_for_web",
-            fields={
-                "title": serializers.CharField(),
-                "message": serializers.CharField(),
-                "image_url": serializers.CharField(),
-                "source_link": serializers.CharField(),
-            },
-        )
-    )
-    def get_render_for_web(self, obj: "AlertGroup"):
+    def get_render_for_web(self, obj: "AlertGroup") -> RenderForWeb | EmptyRenderForWeb:
         if not obj.last_alert:
             return {}
         return AlertGroupFieldsCacheSerializerMixin.get_or_set_web_template_field(
@@ -216,22 +232,23 @@ class AlertGroupListSerializer(
             if log_record.author is not None and log_record.author.public_primary_key not in users_ids:
                 users.append(log_record.author)
                 users_ids.add(log_record.author.public_primary_key)
-        return UserShortSerializer(users, many=True).data
+        return UserShortSerializer(users, context=self.context, many=True).data
 
 
 class AlertGroupSerializer(AlertGroupListSerializer):
     alerts = serializers.SerializerMethodField("get_limited_alerts")
     last_alert_at = serializers.SerializerMethodField()
     paged_users = serializers.SerializerMethodField()
+    external_urls = serializers.SerializerMethodField()
 
     class Meta(AlertGroupListSerializer.Meta):
         fields = AlertGroupListSerializer.Meta.fields + [
             "alerts",
             "render_after_resolve_report_json",
             "slack_permalink",  # TODO: make plugin frontend use "permalinks" field to get Slack link
-            "permalinks",
             "last_alert_at",
             "paged_users",
+            "external_urls",
         ]
 
     def get_last_alert_at(self, obj: "AlertGroup") -> datetime.datetime:
@@ -253,3 +270,21 @@ class AlertGroupSerializer(AlertGroupListSerializer):
 
     def get_paged_users(self, obj: "AlertGroup") -> typing.List[PagedUser]:
         return obj.get_paged_users()
+
+    def get_external_urls(self, obj: "AlertGroup") -> typing.List[ExternalURL]:
+        external_urls = []
+        external_ids = obj.external_ids.all()
+        for external_id in external_ids:
+            source_integration = external_id.source_alert_receive_channel
+            get_url = getattr(source_integration.config, "get_url", None)
+            if get_url:
+                url = source_integration.config.get_url(source_integration, external_id.value)
+                external_urls.append(
+                    {
+                        "integration": source_integration.public_primary_key,
+                        "integration_type": source_integration.integration,
+                        "external_id": external_id.value,
+                        "url": url,
+                    }
+                )
+        return external_urls

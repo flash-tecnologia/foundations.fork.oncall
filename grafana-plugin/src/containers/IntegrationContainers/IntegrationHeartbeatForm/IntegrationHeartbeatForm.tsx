@@ -1,30 +1,32 @@
-import React, { useEffect, useState } from 'react';
+import React, { ReactElement, useEffect, useState } from 'react';
 
 import { SelectableValue } from '@grafana/data';
-import { Button, Drawer, Field, HorizontalGroup, Icon, Select, VerticalGroup } from '@grafana/ui';
+import { Button, Drawer, Field, Icon, Select, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 
-import IntegrationInputField from 'components/IntegrationInputField/IntegrationInputField';
-import Text from 'components/Text/Text';
+import { IntegrationInputField } from 'components/IntegrationInputField/IntegrationInputField';
+import { Text } from 'components/Text/Text';
+import { WithConfirm } from 'components/WithConfirm/WithConfirm';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
-import { AlertReceiveChannel } from 'models/alert_receive_channel/alert_receive_channel.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { SelectOption } from 'state/types';
 import { useStore } from 'state/useStore';
 import { withMobXProviderContext } from 'state/withStore';
-import { openNotification } from 'utils';
-import { UserActions } from 'utils/authorization';
+import { UserActions } from 'utils/authorization/authorization';
+import { StackSize } from 'utils/consts';
+import { openNotification } from 'utils/utils';
 
 import styles from './IntegrationHeartbeatForm.module.scss';
 
 const cx = cn.bind(styles);
 
 interface IntegrationHeartbeatFormProps {
-  alertReceveChannelId: AlertReceiveChannel['id'];
+  alertReceveChannelId: ApiSchemas['AlertReceiveChannel']['id'];
   onClose?: () => void;
 }
 
-const IntegrationHeartbeatForm = observer(({ alertReceveChannelId, onClose }: IntegrationHeartbeatFormProps) => {
+const _IntegrationHeartbeatForm = observer(({ alertReceveChannelId, onClose }: IntegrationHeartbeatFormProps) => {
   const [interval, setInterval] = useState<number>(undefined);
 
   const { heartbeatStore, alertReceiveChannelStore } = useStore();
@@ -46,14 +48,14 @@ const IntegrationHeartbeatForm = observer(({ alertReceveChannelId, onClose }: In
   return (
     <Drawer width={'640px'} scrollableContent title={'Heartbeat'} onClose={onClose} closeOnMaskClick={false}>
       <div data-testid="heartbeat-settings-form">
-        <VerticalGroup spacing={'lg'}>
+        <Stack direction="column" gap={StackSize.lg}>
           <Text type="secondary">
             A heartbeat acts as a healthcheck for alert group monitoring. You can configure you monitoring to regularly
-            send alerts to the heartbeat endpoint. If OnCall doen't receive one of these alerts, it will create an new
+            send alerts to the heartbeat endpoint. If OnCall doesn't receive one of these alerts, it will create an new
             alert group and escalate it
           </Text>
 
-          <VerticalGroup spacing="md">
+          <Stack direction="column" gap={StackSize.md}>
             <div className={cx('u-width-100')}>
               <Field label={'Setup heartbeat interval'}>
                 <WithPermissionControlTooltip userAction={UserActions.IntegrationsWrite}>
@@ -82,16 +84,17 @@ const IntegrationHeartbeatForm = observer(({ alertReceveChannelId, onClose }: In
               rel="noreferrer"
             >
               <Text type="link" size="small">
-                <HorizontalGroup>
+                <Stack>
                   How to configure heartbeats
                   <Icon name="external-link-alt" />
-                </HorizontalGroup>
+                </Stack>
               </Text>
             </a>
-          </VerticalGroup>
+          </Stack>
 
-          <VerticalGroup style={{ marginTop: 'auto' }}>
-            <HorizontalGroup className={cx('buttons')} justify="flex-end">
+          {/* TODO: Check if the styles were appended previously */}
+          <Stack direction="column">
+            <Stack justifyContent="flex-end">
               <Button variant={'secondary'} onClick={onClose} data-testid="close-heartbeat-form">
                 Close
               </Button>
@@ -100,9 +103,16 @@ const IntegrationHeartbeatForm = observer(({ alertReceveChannelId, onClose }: In
                   Update
                 </Button>
               </WithPermissionControlTooltip>
-            </HorizontalGroup>
-          </VerticalGroup>
-        </VerticalGroup>
+              <WithPermissionControlTooltip key="reset" userAction={UserActions.IntegrationsWrite}>
+                <WithConfirm title="Are you sure to reset integration heartbeat?" confirmText="Reset">
+                  <Button variant="destructive" onClick={onReset} data-testid="reset-heartbeat">
+                    Reset
+                  </Button>
+                </WithConfirm>
+              </WithPermissionControlTooltip>
+            </Stack>
+          </Stack>
+        </Stack>
       </div>
     </Drawer>
   );
@@ -117,10 +127,15 @@ const IntegrationHeartbeatForm = observer(({ alertReceveChannelId, onClose }: In
 
     openNotification('Heartbeat settings have been updated');
 
-    await alertReceiveChannelStore.loadItem(alertReceveChannelId);
+    await alertReceiveChannelStore.fetchItemById(alertReceveChannelId);
+  }
+
+  async function onReset() {
+    await heartbeatStore.resetHeartbeatAndRefetchIntegration(heartbeatId, alertReceveChannelId);
+    onClose();
   }
 });
 
-export default withMobXProviderContext(IntegrationHeartbeatForm) as ({
+export const IntegrationHeartbeatForm = withMobXProviderContext(_IntegrationHeartbeatForm) as ({
   alertReceveChannelId,
-}: IntegrationHeartbeatFormProps) => JSX.Element;
+}: IntegrationHeartbeatFormProps) => ReactElement;

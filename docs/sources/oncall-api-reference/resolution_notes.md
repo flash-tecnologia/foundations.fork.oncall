@@ -1,10 +1,18 @@
 ---
 canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/resolution_notes/
-title: Resolution Notes HTTP API
-weight: 900
+title: Resolution notes HTTP API
+weight: 0
+refs:
+  pagination:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/oncall-api-reference/#pagination
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/#pagination
 ---
 
-# Create a resolution note
+# Resolution notes HTTP API
+
+## Create a resolution note
 
 ```shell
 curl "{{API_URL}}/api/v1/resolution_notes/" \
@@ -39,7 +47,7 @@ The above command returns JSON structured in the following way:
 
 `POST {{API_URL}}/api/v1/resolution_notes/`
 
-# Get a resolution note
+## Get a resolution note
 
 ```shell
 curl "{{API_URL}}/api/v1/resolution_notes/M4BTQUS3PRHYQ/" \
@@ -65,7 +73,7 @@ The above command returns JSON structured in the following way:
 
 `GET {{API_URL}}/api/v1/resolution_notes/<RESOLUTION_NOTE_ID>/`
 
-# List resolution notes
+## List resolution notes
 
 ```shell
 curl "{{API_URL}}/api/v1/resolution_notes/" \
@@ -97,6 +105,8 @@ The above command returns JSON structured in the following way:
 }
 ```
 
+> **Note**: The response is [paginated](ref:pagination). You may need to make multiple requests to get all records.
+
 The following available filter parameter should be provided as a `GET` argument:
 
 - `alert_group_id`
@@ -105,7 +115,7 @@ The following available filter parameter should be provided as a `GET` argument:
 
 `GET {{API_URL}}/api/v1/resolution_notes/`
 
-# Update a resolution note
+## Update a resolution note
 
 ```shell
 curl "{{API_URL}}/api/v1/resolution_notes/M4BTQUS3PRHYQ/" \
@@ -134,7 +144,7 @@ The above command returns JSON structured in the following way:
 
 `PUT {{API_URL}}/api/v1/resolution_notes/<RESOLUTION_NOTE_ID>/`
 
-# Delete a resolution note
+## Delete a resolution note
 
 ```shell
 curl "{{API_URL}}/api/v1/resolution_notes/M4BTQUS3PRHYQ/" \

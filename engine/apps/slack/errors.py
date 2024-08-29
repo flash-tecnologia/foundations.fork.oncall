@@ -56,6 +56,15 @@ class SlackAPIUsergroupNotFoundError(SlackAPIError):
     errors = ("no_such_subteam", "subteam_not_found")
 
 
+class SlackAPIUsergroupPaidTeamOnlyError(SlackAPIError):
+    """
+    https://api.slack.com/methods/usergroups.create#:~:text=Name%20too%20long.-,paid_teams_only,-Usergroups%20can%20only
+    https://slack.com/help/articles/212906697-Create-a-user-group
+    """
+
+    errors = ("paid_teams_only",)
+
+
 class SlackAPIInvalidUsersError(SlackAPIError):
     errors = ("invalid_users",)
 
@@ -66,6 +75,10 @@ class SlackAPIChannelNotFoundError(SlackAPIError):
 
 class SlackAPIMessageNotFoundError(SlackAPIError):
     errors = ("message_not_found",)
+
+
+class SlackAPICantUpdateMessageError(SlackAPIError):
+    errors = ("cant_update_message",)
 
 
 class SlackAPIUserNotFoundError(SlackAPIError):

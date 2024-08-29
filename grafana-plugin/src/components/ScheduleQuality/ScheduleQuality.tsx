@@ -1,45 +1,49 @@
-import React, { FC, useEffect, useState } from 'react';
+import React, { FC, useEffect } from 'react';
 
-import { Tooltip, VerticalGroup } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { cx } from '@emotion/css';
+import { Tooltip, Stack, useStyles2 } from '@grafana/ui';
+import { observer } from 'mobx-react';
+import { getUtilStyles } from 'styles/utils.styles';
 
-import PluginLink from 'components/PluginLink/PluginLink';
+import { PluginLink } from 'components/PluginLink/PluginLink';
 import { ScheduleQualityDetails } from 'components/ScheduleQualityDetails/ScheduleQualityDetails';
-import Tag from 'components/Tag/Tag';
-import Text from 'components/Text/Text';
-import TooltipBadge from 'components/TooltipBadge/TooltipBadge';
-import { Schedule, ScheduleScoreQualityResponse, ScheduleScoreQualityResult } from 'models/schedule/schedule.types';
+import { Tag, TagColor } from 'components/Tag/Tag';
+import { Text } from 'components/Text/Text';
+import { TooltipBadge } from 'components/TooltipBadge/TooltipBadge';
+import { Schedule, ScheduleScoreQualityResult } from 'models/schedule/schedule.types';
 import { useStore } from 'state/useStore';
+import { StackSize } from 'utils/consts';
 
-import styles from './ScheduleQuality.module.scss';
-
-const cx = cn.bind(styles);
+import { getScheduleQualityStyles } from './ScheduleQuality.styles';
 
 interface ScheduleQualityProps {
   schedule: Schedule;
-  lastUpdated: number;
 }
 
-const ScheduleQuality: FC<ScheduleQualityProps> = ({ schedule, lastUpdated }) => {
-  const { scheduleStore } = useStore();
-  const [qualityResponse, setQualityResponse] = useState<ScheduleScoreQualityResponse>(undefined);
+export const ScheduleQuality: FC<ScheduleQualityProps> = observer(({ schedule }) => {
+  const styles = useStyles2(getScheduleQualityStyles);
+  const utils = useStyles2(getUtilStyles);
+
+  const {
+    scheduleStore: { getScoreQuality, relatedEscalationChains, quality },
+  } = useStore();
 
   useEffect(() => {
     if (schedule.id) {
-      fetchScoreQuality();
+      getScoreQuality(schedule.id);
     }
-  }, [schedule.id, lastUpdated]);
+  }, [schedule.id]);
 
-  if (!qualityResponse) {
+  if (!quality) {
     return null;
   }
 
-  const relatedEscalationChains = scheduleStore.relatedEscalationChains[schedule.id];
+  const relatedScheduleEscalationChains = relatedEscalationChains[schedule.id];
 
   return (
     <>
-      <div className={cx('root')} data-testid="schedule-quality">
-        {relatedEscalationChains?.length > 0 && schedule?.number_of_escalation_chains > 0 && (
+      <div className={styles.root} data-testid="schedule-quality">
+        {relatedScheduleEscalationChains?.length > 0 && schedule?.number_of_escalation_chains > 0 && (
           <TooltipBadge
             borderType="success"
             icon="link"
@@ -47,15 +51,15 @@ const ScheduleQuality: FC<ScheduleQualityProps> = ({ schedule, lastUpdated }) =>
             text={schedule.number_of_escalation_chains}
             tooltipTitle="Used in escalations"
             tooltipContent={
-              <VerticalGroup spacing="sm">
-                {relatedEscalationChains.map((escalationChain) => (
+              <Stack direction="column" gap={StackSize.sm}>
+                {relatedScheduleEscalationChains.map((escalationChain) => (
                   <div key={escalationChain.pk}>
                     <PluginLink query={{ page: 'escalations', id: escalationChain.pk }} className="link">
                       <Text type="link">{escalationChain.name}</Text>
                     </PluginLink>
                   </div>
                 ))}
-              </VerticalGroup>
+              </Stack>
             }
           />
         )}
@@ -68,13 +72,13 @@ const ScheduleQuality: FC<ScheduleQualityProps> = ({ schedule, lastUpdated }) =>
             text={schedule.warnings.length}
             tooltipTitle="Warnings"
             tooltipContent={
-              <VerticalGroup spacing="none">
+              <Stack direction="column" gap={StackSize.none}>
                 {schedule.warnings.map((warning, index) => (
                   <Text type="primary" key={index}>
                     {warning}
                   </Text>
                 ))}
-              </VerticalGroup>
+              </Stack>
             }
           />
         )}
@@ -82,13 +86,11 @@ const ScheduleQuality: FC<ScheduleQualityProps> = ({ schedule, lastUpdated }) =>
         <Tooltip
           placement="bottom-start"
           interactive
-          content={
-            <ScheduleQualityDetails quality={qualityResponse} getScheduleQualityString={getScheduleQualityString} />
-          }
+          content={<ScheduleQualityDetails quality={quality} getScheduleQualityString={getScheduleQualityString} />}
         >
-          <div className={cx('u-cursor-default')}>
-            <Tag className={cx('tag', getTagClass())}>
-              Quality: <strong>{getScheduleQualityString(qualityResponse.total_score)}</strong>
+          <div className={cx(utils.cursorDefault)}>
+            <Tag className={styles.tag} color={getTagSeverity()}>
+              Quality: <strong>{getScheduleQualityString(quality.total_score)}</strong>
             </Tag>
           </div>
         </Tooltip>
@@ -112,22 +114,13 @@ const ScheduleQuality: FC<ScheduleQualityProps> = ({ schedule, lastUpdated }) =>
     return ScheduleScoreQualityResult.Great;
   }
 
-  async function fetchScoreQuality() {
-    await Promise.all([
-      scheduleStore.getScoreQuality(schedule.id).then((qualityResponse) => setQualityResponse(qualityResponse)),
-      scheduleStore.updateRelatedEscalationChains(schedule.id),
-    ]);
-  }
-
-  function getTagClass() {
-    if (qualityResponse?.total_score < 20) {
-      return 'tag--danger';
+  function getTagSeverity() {
+    if (quality?.total_score < 20) {
+      return TagColor.ERROR_LABEL;
     }
-    if (qualityResponse?.total_score < 60) {
-      return 'tag--warning';
+    if (quality?.total_score < 60) {
+      return TagColor.WARNING_LABEL;
     }
-    return 'tag--primary';
+    return TagColor.SUCCESS_LABEL;
   }
-};
-
-export default ScheduleQuality;
+});

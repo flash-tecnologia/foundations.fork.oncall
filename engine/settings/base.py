@@ -64,13 +64,16 @@ FEATURE_SLACK_INTEGRATION_ENABLED = getenv_boolean("FEATURE_SLACK_INTEGRATION_EN
 FEATURE_MULTIREGION_ENABLED = getenv_boolean("FEATURE_MULTIREGION_ENABLED", default=False)
 FEATURE_INBOUND_EMAIL_ENABLED = getenv_boolean("FEATURE_INBOUND_EMAIL_ENABLED", default=True)
 FEATURE_PROMETHEUS_EXPORTER_ENABLED = getenv_boolean("FEATURE_PROMETHEUS_EXPORTER_ENABLED", default=False)
-FEATURE_GRAFANA_ALERTING_V2_ENABLED = getenv_boolean("FEATURE_GRAFANA_ALERTING_V2_ENABLED", default=False)
+FEATURE_GRAFANA_ALERTING_V2_ENABLED = getenv_boolean("FEATURE_GRAFANA_ALERTING_V2_ENABLED", default=True)
 GRAFANA_CLOUD_ONCALL_HEARTBEAT_ENABLED = getenv_boolean("GRAFANA_CLOUD_ONCALL_HEARTBEAT_ENABLED", default=True)
 GRAFANA_CLOUD_NOTIFICATIONS_ENABLED = getenv_boolean("GRAFANA_CLOUD_NOTIFICATIONS_ENABLED", default=True)
 # Enable labels feature fo all organizations. This flag overrides FEATURE_LABELS_ENABLED_FOR_GRAFANA_ORGS
 FEATURE_LABELS_ENABLED_FOR_ALL = getenv_boolean("FEATURE_LABELS_ENABLED_FOR_ALL", default=False)
 # Enable labels feature for organizations from the list. Use OnCall organization ID, for this flag
 FEATURE_LABELS_ENABLED_PER_ORG = getenv_list("FEATURE_LABELS_ENABLED_PER_ORG", default=list())
+FEATURE_ALERT_GROUP_SEARCH_ENABLED = getenv_boolean("FEATURE_ALERT_GROUP_SEARCH_ENABLED", default=True)
+FEATURE_ALERT_GROUP_SEARCH_CUTOFF_DAYS = getenv_integer("FEATURE_ALERT_GROUP_SEARCH_CUTOFF_DAYS", default=None)
+FEATURE_NOTIFICATION_BUNDLE_ENABLED = getenv_boolean("FEATURE_NOTIFICATION_BUNDLE_ENABLED", default=True)
 
 TWILIO_API_KEY_SID = os.environ.get("TWILIO_API_KEY_SID")
 TWILIO_API_KEY_SECRET = os.environ.get("TWILIO_API_KEY_SECRET")
@@ -91,15 +94,30 @@ GRAFANA_CLOUD_ONCALL_TOKEN = os.environ.get("GRAFANA_CLOUD_ONCALL_TOKEN", None)
 
 # Outgoing webhook settings
 DANGEROUS_WEBHOOKS_ENABLED = getenv_boolean("DANGEROUS_WEBHOOKS_ENABLED", default=False)
+OUTGOING_WEBHOOK_TIMEOUT = getenv_integer("OUTGOING_WEBHOOK_TIMEOUT", default=4)
 WEBHOOK_RESPONSE_LIMIT = 50000
 
 # Multiregion settings
 ONCALL_GATEWAY_URL = os.environ.get("ONCALL_GATEWAY_URL", "")
 ONCALL_GATEWAY_API_TOKEN = os.environ.get("ONCALL_GATEWAY_API_TOKEN", "")
 ONCALL_BACKEND_REGION = os.environ.get("ONCALL_BACKEND_REGION")
+UNIFIED_SLACK_APP_ENABLED = getenv_boolean("UNIFIED_SLACK_APP_ENABLED", default=False)
+# secret to verify the incoming requests from the chatops-proxy
+CHATOPS_SIGNING_SECRET = os.environ.get("CHATOPS_SIGNING_SECRET", None)
 
 # Prometheus exporter metrics endpoint auth
 PROMETHEUS_EXPORTER_SECRET = os.environ.get("PROMETHEUS_EXPORTER_SECRET")
+# Application metric names without prefixes
+METRIC_ALERT_GROUPS_TOTAL_NAME = "alert_groups_total"
+METRIC_ALERT_GROUPS_RESPONSE_TIME_NAME = "alert_groups_response_time"
+METRIC_USER_WAS_NOTIFIED_OF_ALERT_GROUPS_NAME = "user_was_notified_of_alert_groups"
+METRICS_ALL = [
+    METRIC_ALERT_GROUPS_TOTAL_NAME,
+    METRIC_ALERT_GROUPS_RESPONSE_TIME_NAME,
+    METRIC_USER_WAS_NOTIFIED_OF_ALERT_GROUPS_NAME,
+]
+# List of metrics to collect. Collect all available application metrics by default
+METRICS_TO_COLLECT = getenv_list("METRICS_TO_COLLECT", METRICS_ALL)
 
 
 # Database
@@ -181,6 +199,13 @@ if DATABASE_TYPE == DatabaseTypes.MYSQL:
     import pymysql
 
     pymysql.install_as_MySQLdb()
+
+DJANGO_MYSQL_REWRITE_QUERIES = True
+
+ALERT_GROUPS_DISABLE_PREFER_ORDERING_INDEX = DATABASE_TYPE == DatabaseTypes.MYSQL and getenv_boolean(
+    "ALERT_GROUPS_DISABLE_PREFER_ORDERING_INDEX", default=False
+)
+ALERT_GROUP_LIST_TRY_PREFETCH = getenv_boolean("ALERT_GROUP_LIST_TRY_PREFETCH", default=False)
 
 # Redis
 REDIS_USERNAME = os.getenv("REDIS_USERNAME", "")
@@ -278,20 +303,25 @@ INSTALLED_APPS = [
     "django_dbconn_retry",
     "apps.phone_notifications",
     "drf_spectacular",
+    "apps.google",
+    "apps.chatops_proxy",
 ]
+
+if DATABASE_TYPE == DatabaseTypes.MYSQL:
+    INSTALLED_APPS += ["django_mysql"]
 
 REST_FRAMEWORK = {
     "DEFAULT_PARSER_CLASSES": (
-        "engine.parsers.JSONParser",
-        "engine.parsers.FormParser",
+        "rest_framework.parsers.JSONParser",
+        "rest_framework.parsers.FormParser",
         "rest_framework.parsers.MultiPartParser",
     ),
     "DEFAULT_AUTHENTICATION_CLASSES": [],
-    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_SCHEMA_CLASS": "engine.schema.CustomAutoSchema",
 }
 
 
-DRF_SPECTACULAR_ENABLED = getenv_boolean("DRF_SPECTACULAR_ENABLED", default=True)
+DRF_SPECTACULAR_ENABLED = getenv_boolean("DRF_SPECTACULAR_ENABLED", default=False)
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Grafana OnCall Private API",
@@ -315,13 +345,20 @@ if SWAGGER_UI_SETTINGS_URL:
 SPECTACULAR_INCLUDED_PATHS = [
     "/features",
     "/alertgroups",
+    "/alert_receive_channels",
+    # current user endpoint 👇, without trailing slash we pick-up /user_group endpoints, which we don't want for now
+    "/user/",
+    "/users",
     "/labels",
+    # social auth routes
+    "/login",
+    "/complete",
+    "/disconnect",
 ]
 
 MIDDLEWARE = [
     "log_request_id.middleware.RequestIDMiddleware",
     "engine.middlewares.RequestTimeLoggingMiddleware",
-    "engine.middlewares.BanAlertConsumptionBasedOnSettingsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "debug_toolbar.middleware.DebugToolbarMiddleware",
@@ -340,14 +377,25 @@ MIDDLEWARE = [
     "apps.user_management.middlewares.OrganizationDeletedMiddleware",
 ]
 
-LOG_REQUEST_ID_HEADER = "HTTP_X_CLOUD_TRACE_CONTEXT"
+if OTEL_TRACING_ENABLED:
+    MIDDLEWARE.insert(0, "engine.middlewares.LogRequestHeadersMiddleware")
 
+LOG_REQUEST_ID_HEADER = "HTTP_X_CLOUD_TRACE_CONTEXT"
+LOG_CELERY_TASK_ARGUMENTS = getenv_boolean("LOG_CELERY_TASK_ARGUMENTS", default=True)
+
+log_fmt = "source=engine:app google_trace_id=%(request_id)s logger=%(name)s %(message)s"
+
+if OTEL_TRACING_ENABLED:
+    log_fmt = (
+        "source=engine:app trace_id=%(otelTraceID)s span_id=%("
+        "otelSpanID)s trace_sampled=%(otelTraceSampled)s google_trace_id=%(request_id)s logger=%(name)s %(message)s"
+    )
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "filters": {"request_id": {"()": "log_request_id.filters.RequestIDFilter"}},
     "formatters": {
-        "standard": {"format": "source=engine:app google_trace_id=%(request_id)s logger=%(name)s %(message)s"},
+        "standard": {"format": log_fmt},
         "insight_logger": {"format": "insight=true logger=%(name)s %(message)s"},
     },
     "handlers": {
@@ -421,8 +469,6 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 
 USE_I18N = True
-
-USE_L10N = True
 
 USE_TZ = True
 
@@ -503,19 +549,9 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(minute=1, hour=12, day_of_week="monday"),
         "args": (),
     },
-    "start_check_gaps_in_schedule": {
-        "task": "apps.schedules.tasks.notify_about_gaps_in_schedule.start_check_gaps_in_schedule",
-        "schedule": crontab(minute=0, hour=0),
-        "args": (),
-    },
     "start_notify_about_empty_shifts_in_schedule": {
         "task": "apps.schedules.tasks.notify_about_empty_shifts_in_schedule.start_notify_about_empty_shifts_in_schedule",
         "schedule": crontab(minute=0, hour=12, day_of_week="monday"),
-        "args": (),
-    },
-    "start_check_empty_shifts_in_schedule": {
-        "task": "apps.schedules.tasks.notify_about_empty_shifts_in_schedule.start_check_empty_shifts_in_schedule",
-        "schedule": crontab(minute=0, hour=0),
         "args": (),
     },
     "populate_slack_usergroups": {
@@ -536,6 +572,11 @@ CELERY_BEAT_SCHEDULE = {
     "start_sync_organizations": {
         "task": "apps.grafana_plugin.tasks.sync.start_sync_organizations",
         "schedule": crontab(minute="*/30"),
+        "args": (),
+    },
+    "start_cleanup_deleted_integrations": {
+        "task": "apps.grafana_plugin.tasks.sync.start_cleanup_deleted_integrations",
+        "schedule": crontab(hour="4, 16", minute=35),
         "args": (),
     },
     "start_cleanup_deleted_organizations": {
@@ -572,6 +613,14 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
+START_SYNC_ORG_WITH_CHATOPS_PROXY_ENABLED = getenv_boolean("START_SYNC_ORG_WITH_CHATOPS_PROXY_ENABLED", default=False)
+if FEATURE_MULTIREGION_ENABLED and START_SYNC_ORG_WITH_CHATOPS_PROXY_ENABLED:
+    CELERY_BEAT_SCHEDULE["start_sync_org_with_chatops_proxy"] = {
+        "task": "apps.chatops_proxy.tasks.start_sync_org_with_chatops_proxy",
+        "schedule": crontab(minute=0, hour=12),  # Execute every day at noon
+        "args": (),
+    }
+
 if ESCALATION_AUDITOR_ENABLED:
     CELERY_BEAT_SCHEDULE["check_escalations"] = {
         "task": "apps.alerts.tasks.check_escalation_finished.check_escalation_finished_task",
@@ -584,6 +633,11 @@ if ESCALATION_AUDITOR_ENABLED:
                 getenv_integer("ALERT_GROUP_ESCALATION_AUDITOR_CELERY_TASK_HEARTBEAT_INTERVAL", default=13)
             )
         ),
+        "args": (),
+    }
+    CELERY_BEAT_SCHEDULE["check_personal_notifications"] = {
+        "task": "apps.alerts.tasks.check_escalation_finished.check_personal_notifications_task",
+        "schedule": crontab(minute="*/15"),  # every 15 minutes
         "args": (),
     }
 
@@ -627,16 +681,37 @@ AUTHENTICATION_BACKENDS = [
     "apps.social_auth.backends.InstallSlackOAuth2V2",
     "apps.social_auth.backends.LoginSlackOAuth2V2",
     "django.contrib.auth.backends.ModelBackend",
+    "apps.social_auth.backends.GoogleOAuth2",
 ]
+
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.environ.get("SOCIAL_AUTH_GOOGLE_OAUTH2_KEY")
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ.get("SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET")
+GOOGLE_OAUTH2_ENABLED = SOCIAL_AUTH_GOOGLE_OAUTH2_KEY is not None and SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET is not None
+
+if GOOGLE_OAUTH2_ENABLED:
+    CELERY_BEAT_SCHEDULE["sync_google_calendar_out_of_office_events_for_all_users"] = {
+        "task": "apps.google.tasks.sync_out_of_office_calendar_events_for_all_users",
+        "schedule": crontab(minute="*/30"),  # every 30 minutes
+        "args": (),
+    }
+
+# NOTE: for right now we probably only need the calendar.events.readonly scope
+# however, if we want to write events back to the user's calendar
+# we'll probably need to change this to the calendar.events scope
+# (not sure how hard this is to migrate to in the future?)
+# https://developers.google.com/identity/protocols/oauth2/scopes#calendar
+SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE = getenv_list(
+    "SOCIAL_AUTH_GOOGLE_OAUTH2_SCOPE", default=["https://www.googleapis.com/auth/calendar.events.readonly"]
+)
 
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 SLACK_SIGNING_SECRET_LIVE = os.environ.get("SLACK_SIGNING_SECRET_LIVE", "")
 
 SLACK_CLIENT_OAUTH_ID = os.environ.get("SLACK_CLIENT_OAUTH_ID")
 SLACK_CLIENT_OAUTH_SECRET = os.environ.get("SLACK_CLIENT_OAUTH_SECRET")
-
-SLACK_SLASH_COMMAND_NAME = os.environ.get("SLACK_SLASH_COMMAND_NAME", "/oncall")
-SLACK_DIRECT_PAGING_SLASH_COMMAND = os.environ.get("SLACK_DIRECT_PAGING_SLASH_COMMAND", "/escalate")
+SLACK_DIRECT_PAGING_SLASH_COMMAND = os.environ.get("SLACK_DIRECT_PAGING_SLASH_COMMAND", "/escalate").lstrip("/")
+# it's a root command for unified slack - '/<SLACK_IRM_ROOT_COMMAND> incident new', '/<SLACK_IRM_ROOT_COMMAND> escalate'
+SLACK_IRM_ROOT_COMMAND = os.environ.get("SLACK_IRM_ROOT_COMMAND", "/grafana").lstrip("/")
 
 # Controls if slack integration can be installed/uninstalled.
 SLACK_INTEGRATION_MAINTENANCE_ENABLED = os.environ.get("SLACK_INTEGRATION_MAINTENANCE_ENABLED", False)
@@ -660,12 +735,31 @@ SOCIAL_AUTH_SLACK_INSTALL_FREE_CUSTOM_SCOPE = [
 ]
 
 SOCIAL_AUTH_PIPELINE = (
-    "apps.social_auth.pipeline.set_user_and_organization_from_request",
+    "apps.social_auth.pipeline.common.set_user_and_organization_from_request",
     "social_core.pipeline.social_auth.social_details",
-    "apps.social_auth.pipeline.connect_user_to_slack",
-    "apps.social_auth.pipeline.populate_slack_identities",
-    "apps.social_auth.pipeline.delete_slack_auth_token",
+    "apps.social_auth.pipeline.slack.connect_user_to_slack",
+    "apps.social_auth.pipeline.slack.populate_slack_identities",
+    "apps.social_auth.pipeline.slack.delete_slack_auth_token",
 )
+
+SOCIAL_AUTH_GOOGLE_OAUTH2_PIPELINE = (
+    "apps.social_auth.pipeline.common.set_user_and_organization_from_request",
+    "apps.social_auth.pipeline.google.connect_user_to_google",
+)
+
+SOCIAL_AUTH_GOOGLE_OAUTH2_DISCONNECT_PIPELINE = (
+    "apps.social_auth.pipeline.common.set_user_and_organization_from_request",
+    "apps.social_auth.pipeline.google.disconnect_user_google_oauth2_settings",
+)
+
+# https://python-social-auth.readthedocs.io/en/latest/use_cases.html#re-prompt-google-oauth2-users-to-refresh-the-refresh-token
+# https://developers.google.com/identity/protocols/oauth2/web-server
+SOCIAL_AUTH_GOOGLE_OAUTH2_AUTH_EXTRA_ARGUMENTS = {
+    # Indicates whether your application can refresh access tokens when the user is not present at the browser.
+    # Valid parameter values are online, which is the default value, and offline.
+    "access_type": "offline",
+    "approval_prompt": "auto",
+}
 
 SOCIAL_AUTH_FIELDS_STORED_IN_SESSION: typing.List[str] = []
 SOCIAL_AUTH_REDIRECT_IS_HTTPS = getenv_boolean("SOCIAL_AUTH_REDIRECT_IS_HTTPS", default=True)
@@ -676,7 +770,7 @@ PUBLIC_PRIMARY_KEY_MIN_LENGTH = 12
 PUBLIC_PRIMARY_KEY_ALLOWED_CHARS = "ABCDEFGHIJKLMNPQRSTUVWXYZ123456789"
 
 AUTH_LINK_TIMEOUT_SECONDS = 300
-SLACK_AUTH_TOKEN_TIMEOUT_SECONDS = 300
+AUTH_TOKEN_TIMEOUT_SECONDS = 300
 
 SLACK_INSTALL_RETURN_REDIRECT_HOST = os.environ.get("SLACK_INSTALL_RETURN_REDIRECT_HOST", None)
 
@@ -718,27 +812,25 @@ FCM_DJANGO_SETTINGS = {
 }
 
 MOBILE_APP_GATEWAY_ENABLED = getenv_boolean("MOBILE_APP_GATEWAY_ENABLED", default=False)
-MOBILE_APP_GATEWAY_RSA_PRIVATE_KEY = os.environ.get("MOBILE_APP_GATEWAY_RSA_PRIVATE_KEY", None)
-if MOBILE_APP_GATEWAY_ENABLED and not MOBILE_APP_GATEWAY_RSA_PRIVATE_KEY:
-    raise RuntimeError("MOBILE_APP_GATEWAY_RSA_PRIVATE_KEY is required when MOBILE_APP_GATEWAY_ENABLED is True")
+GRAFANA_CLOUD_AUTH_API_URL = os.environ.get("GRAFANA_CLOUD_AUTH_API_URL", None)
+GRAFANA_CLOUD_AUTH_API_SYSTEM_TOKEN = os.environ.get("GRAFANA_CLOUD_AUTH_API_SYSTEM_TOKEN", None)
 
 SELF_HOSTED_SETTINGS = {
-    "STACK_ID": 5,
-    "STACK_SLUG": "self_hosted_stack",
+    "STACK_ID": getenv_integer("SELF_HOSTED_STACK_ID", 5),
+    "STACK_SLUG": os.environ.get("SELF_HOSTED_STACK_SLUG", "self_hosted_stack"),
     "ORG_ID": 100,
-    "ORG_SLUG": "self_hosted_org",
-    "ORG_TITLE": "Self-Hosted Organization",
-    "REGION_SLUG": "self_hosted_region",
+    "ORG_SLUG": os.environ.get("SELF_HOSTED_ORG_SLUG", "self_hosted_org"),
+    "ORG_TITLE": os.environ.get("SELF_HOSTED_ORG_TITLE", "Self-Hosted Organization"),
+    "REGION_SLUG": os.environ.get("SELF_HOSTED_REGION_SLUG", "self_hosted_region"),
     "GRAFANA_API_URL": os.environ.get("GRAFANA_API_URL", default=None),
-    "CLUSTER_SLUG": "self_hosted_cluster",
+    "CLUSTER_SLUG": os.environ.get("SELF_HOSTED_CLUSTER_SLUG", "self_hosted_cluster"),
 }
 
 GRAFANA_INCIDENT_STATIC_API_KEY = os.environ.get("GRAFANA_INCIDENT_STATIC_API_KEY", None)
 
-DATA_UPLOAD_MAX_MEMORY_SIZE = getenv_integer("DATA_UPLOAD_MAX_MEMORY_SIZE", 1_048_576)  # 1mb by default
-JINJA_TEMPLATE_MAX_LENGTH = 50000
-JINJA_RESULT_TITLE_MAX_LENGTH = 500
-JINJA_RESULT_MAX_LENGTH = 50000
+JINJA_TEMPLATE_MAX_LENGTH = os.getenv("JINJA_TEMPLATE_MAX_LENGTH", 50000)
+JINJA_RESULT_TITLE_MAX_LENGTH = os.getenv("JINJA_RESULT_TITLE_MAX_LENGTH", 500)
+JINJA_RESULT_MAX_LENGTH = os.getenv("JINJA_RESULT_MAX_LENGTH", 50000)
 
 # Log inbound/outbound calls as slow=1 if they exceed threshold
 SLOW_THRESHOLD_SECONDS = 2.0
@@ -750,6 +842,7 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 EMAIL_PORT = getenv_integer("EMAIL_PORT", 587)
 EMAIL_USE_TLS = getenv_boolean("EMAIL_USE_TLS", True)
+EMAIL_USE_SSL = getenv_boolean("EMAIL_USE_SSL", False)
 EMAIL_FROM_ADDRESS = os.getenv("EMAIL_FROM_ADDRESS")
 EMAIL_NOTIFICATIONS_LIMIT = getenv_integer("EMAIL_NOTIFICATIONS_LIMIT", 200)
 
@@ -763,13 +856,12 @@ INBOUND_EMAIL_DOMAIN = os.getenv("INBOUND_EMAIL_DOMAIN")
 INBOUND_EMAIL_WEBHOOK_SECRET = os.getenv("INBOUND_EMAIL_WEBHOOK_SECRET")
 
 INSTALLED_ONCALL_INTEGRATIONS = [
-    "config_integrations.alertmanager",
-    "config_integrations.legacy_alertmanager",
-    "config_integrations.grafana",
+    # Featured
     "config_integrations.grafana_alerting",
-    "config_integrations.legacy_grafana_alerting",
-    "config_integrations.formatted_webhook",
     "config_integrations.webhook",
+    "config_integrations.alertmanager",
+    # Not featured
+    "config_integrations.formatted_webhook",
     "config_integrations.kapacitor",
     "config_integrations.elastalert",
     "config_integrations.heartbeat",
@@ -779,15 +871,23 @@ INSTALLED_ONCALL_INTEGRATIONS = [
     "config_integrations.slack_channel",
     "config_integrations.zabbix",
     "config_integrations.direct_paging",
+    # Actually it's Grafana 8 integration.
+    # users are confused and tries to use to send alerts from external Grafana.
+    # So move it closer to the end of the list
+    "config_integrations.grafana",
+    # Legacy are not shown, ordering isn't important
+    "config_integrations.legacy_alertmanager",
+    "config_integrations.legacy_grafana_alerting",
 ]
 
+ADVANCED_WEBHOOK_PRESET = "apps.webhooks.presets.advanced.AdvancedWebhookPreset"
 INSTALLED_WEBHOOK_PRESETS = [
     "apps.webhooks.presets.simple.SimpleWebhookPreset",
-    "apps.webhooks.presets.advanced.AdvancedWebhookPreset",
+    ADVANCED_WEBHOOK_PRESET,
 ]
 
 if IS_OPEN_SOURCE:
-    INSTALLED_APPS += ["apps.oss_installation", "apps.zvonok"]  # noqa
+    INSTALLED_APPS += ["apps.oss_installation", "apps.zvonok", "apps.exotel"]  # noqa
 
     CELERY_BEAT_SCHEDULE["send_usage_stats"] = {  # noqa
         "task": "apps.oss_installation.tasks.send_usage_stats_report",
@@ -834,6 +934,7 @@ PHONE_PROVIDERS = {
 
 if IS_OPEN_SOURCE:
     PHONE_PROVIDERS["zvonok"] = "apps.zvonok.phone_provider.ZvonokPhoneProvider"
+    PHONE_PROVIDERS["exotel"] = "apps.exotel.phone_provider.ExotelPhoneProvider"
 
 PHONE_PROVIDER = os.environ.get("PHONE_PROVIDER", default=DEFAULT_PHONE_PROVIDER)
 
@@ -846,5 +947,17 @@ ZVONOK_POSTBACK_CAMPAIGN_ID = os.getenv("ZVONOK_POSTBACK_CAMPAIGN_ID", "campaign
 ZVONOK_POSTBACK_STATUS = os.getenv("ZVONOK_POSTBACK_STATUS", "status")
 ZVONOK_POSTBACK_USER_CHOICE = os.getenv("ZVONOK_POSTBACK_USER_CHOICE", None)
 ZVONOK_POSTBACK_USER_CHOICE_ACK = os.getenv("ZVONOK_POSTBACK_USER_CHOICE_ACK", None)
+ZVONOK_VERIFICATION_CAMPAIGN_ID = os.getenv("ZVONOK_VERIFICATION_CAMPAIGN_ID", None)
+
+EXOTEL_ACCOUNT_SID = os.getenv("EXOTEL_ACCOUNT_SID", None)
+EXOTEL_API_KEY = os.getenv("EXOTEL_API_KEY", None)
+EXOTEL_API_TOKEN = os.getenv("EXOTEL_API_TOKEN", None)
+EXOTEL_APP_ID = os.getenv("EXOTEL_APP_ID", None)
+EXOTEL_CALLER_ID = os.getenv("EXOTEL_CALLER_ID", None)
+EXOTEL_SMS_SENDER_ID = os.getenv("EXOTEL_SMS_SENDER_ID", None)
+EXOTEL_SMS_VERIFICATION_TEMPLATE = os.getenv("EXOTEL_SMS_VERIFICATION_TEMPLATE", None)
+EXOTEL_SMS_DLT_ENTITY_ID = os.getenv("EXOTEL_SMS_DLT_ENTITY_ID", None)
 
 DETACHED_INTEGRATIONS_SERVER = getenv_boolean("DETACHED_INTEGRATIONS_SERVER", default=False)
+
+ACKNOWLEDGE_REMINDER_TASK_EXPIRY_DAYS = os.environ.get("ACKNOWLEDGE_REMINDER_TASK_EXPIRY_DAYS", default=14)

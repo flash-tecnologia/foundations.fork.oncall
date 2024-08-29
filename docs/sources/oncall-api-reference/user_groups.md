@@ -1,12 +1,20 @@
 ---
 canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/user_groups/
-title: OnCall User Groups HTTP API
-weight: 1400
+title: OnCall user groups HTTP API
+weight: 0
+refs:
+  pagination:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/oncall-api-reference/#pagination
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/#pagination
 ---
 
 <!--Used in escalation policies with type = `notify_user_group` and in schedules.-->
 
-# List user groups
+# OnCall user groups HTTP API
+
+## List user groups
 
 ```shell
 curl "{{API_URL}}/api/v1/user_groups/" \
@@ -38,6 +46,8 @@ The above command returns JSON structured in the following way:
   "total_pages": 1
 }
 ```
+
+> **Note**: The response is [paginated](ref:pagination). You may need to make multiple requests to get all records.
 
 | Parameter | Unique | Description                                                                                           |
 | --------- | :----: | :---------------------------------------------------------------------------------------------------- |

@@ -2,18 +2,21 @@ import importlib
 import logging
 import typing
 
+from apps.api.permissions import LegacyAccessControlCompatiblePermissions, user_is_authorized
 from apps.slack.alert_group_slack_service import AlertGroupSlackService
 from apps.slack.client import SlackClient
+from apps.slack.types import EventPayload
 
 if typing.TYPE_CHECKING:
     from apps.slack.models import SlackTeamIdentity, SlackUserIdentity
-    from apps.slack.types import EventPayload
     from apps.user_management.models import Organization, User
 
 logger = logging.getLogger(__name__)
 
 
 class ScenarioStep(object):
+    REQUIRED_PERMISSIONS: LegacyAccessControlCompatiblePermissions = []
+
     def __init__(
         self,
         slack_team_identity: "SlackTeamIdentity",
@@ -27,12 +30,36 @@ class ScenarioStep(object):
 
         self.alert_group_slack_service = AlertGroupSlackService(slack_team_identity, self._slack_client)
 
+    def is_authorized(self) -> bool:
+        """
+        Check that user has required permissions to perform an action.
+        """
+        return self.user is not None and user_is_authorized(self.user, self.REQUIRED_PERMISSIONS)
+
+    def open_unauthorized_warning(self, payload: EventPayload) -> None:
+        self.open_warning_window(
+            payload,
+            warning_text="You do not have permission to perform this action. Ask an admin to upgrade your permissions.",
+            title="Permission denied",
+        )
+
     def process_scenario(
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
         payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
+        """
+        process_scenario executes the logic of the step on slack interaction.
+        Args:
+            slack_user_identity: SlackUserIdentity who interacted with slack
+            slack_team_identity: Slack Workspace where interaction happened
+            payload: EventPayload from slack
+            predefined_org:
+                Organization where interaction happened.
+                It's optionally defined by chatops-proxy for slash commands and should be used only in SlashCommands steps
+        """
         pass
 
     @classmethod

@@ -7,6 +7,7 @@ from django.core.mail.backends.locmem import EmailBackend
 
 from apps.base.models import UserNotificationPolicy, UserNotificationPolicyLogRecord
 from apps.email.alert_rendering import build_subject_and_message
+from apps.email.models import EmailMessage
 from apps.email.tasks import get_from_email, notify_user_async
 from apps.user_management.subscription_strategy.free_public_beta_subscription_strategy import (
     FreePublicBetaSubscriptionStrategy,
@@ -44,6 +45,9 @@ def test_notify_user(
 
     notify_user_async(user.pk, alert_group.pk, notification_policy.pk)
     assert len(mail.outbox) == 1
+
+    log_record = notification_policy.personal_log_records.last()
+    assert log_record.type == UserNotificationPolicyLogRecord.TYPE_PERSONAL_NOTIFICATION_SUCCESS
 
 
 @pytest.mark.django_db
@@ -208,4 +212,35 @@ def test_subject_newlines_removed(
     make_alert(alert_group, raw_request_data={})
 
     subject, _ = build_subject_and_message(alert_group, 1)
-    assert subject == "[testnewlines] You are invited to check an alert group"
+    assert subject == "testnewlines"
+
+
+@pytest.mark.django_db
+def test_notify_user_fallback_default_policy(
+    settings,
+    make_organization,
+    make_user_for_organization,
+    make_token_for_organization,
+    make_alert_receive_channel,
+    make_alert_group,
+    make_alert,
+    make_user_notification_policy,
+):
+    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    settings.EMAIL_HOST = "test"
+
+    organization = make_organization()
+    user = make_user_for_organization(organization)
+
+    alert_receive_channel = make_alert_receive_channel(organization)
+    alert_group = make_alert_group(alert_receive_channel)
+
+    make_alert(alert_group=alert_group, raw_request_data=alert_receive_channel.config.example_payload)
+
+    notify_user_async(user.pk, alert_group.pk, None)
+    assert len(mail.outbox) == 1
+
+    log_record = UserNotificationPolicyLogRecord.objects.filter(author=user, alert_group=alert_group).first()
+    assert log_record.type == UserNotificationPolicyLogRecord.TYPE_PERSONAL_NOTIFICATION_SUCCESS
+
+    EmailMessage.objects.get(receiver=user, represents_alert_group=alert_group, notification_policy=None)

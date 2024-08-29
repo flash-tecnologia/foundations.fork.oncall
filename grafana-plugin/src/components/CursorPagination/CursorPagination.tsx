@@ -1,9 +1,10 @@
 import React, { FC, useCallback, useEffect, useState } from 'react';
 
 import { SelectableValue } from '@grafana/data';
-import { Button, HorizontalGroup, Icon, Select } from '@grafana/ui';
+import { Button, Icon, Select, Stack } from '@grafana/ui';
 
-import Text from 'components/Text/Text';
+import { Text } from 'components/Text/Text';
+import { StackSize } from 'utils/consts';
 
 interface CursorPaginationProps {
   current: string;
@@ -15,7 +16,7 @@ interface CursorPaginationProps {
   next: string;
 }
 
-const CursorPagination: FC<CursorPaginationProps> = (props) => {
+export const CursorPagination: FC<CursorPaginationProps> = (props) => {
   const { current, onChange, prev, next, itemsPerPage, itemsPerPageOptions, onChangeItemsPerPage } = props;
 
   const [disabled, setDisabled] = useState<boolean>(false);
@@ -30,8 +31,8 @@ const CursorPagination: FC<CursorPaginationProps> = (props) => {
   }, []);
 
   return (
-    <HorizontalGroup spacing="md" justify="flex-end">
-      <HorizontalGroup>
+    <Stack gap={StackSize.md} justifyContent="flex-end">
+      <Stack>
         <Text type="secondary">Items per list</Text>
         <Select
           isSearchable={false}
@@ -39,8 +40,8 @@ const CursorPagination: FC<CursorPaginationProps> = (props) => {
           value={itemsPerPage}
           onChange={onChangeItemsPerPageCallback}
         />
-      </HorizontalGroup>
-      <HorizontalGroup>
+      </Stack>
+      <Stack>
         <Button
           aria-label="previous"
           size="sm"
@@ -66,9 +67,7 @@ const CursorPagination: FC<CursorPaginationProps> = (props) => {
         >
           <Icon name="angle-right" />
         </Button>
-      </HorizontalGroup>
-    </HorizontalGroup>
+      </Stack>
+    </Stack>
   );
 };
-
-export default CursorPagination;

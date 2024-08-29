@@ -1,29 +1,31 @@
 import React, { useState } from 'react';
 
-import { Button, HorizontalGroup, Icon, Modal, Tooltip, VerticalGroup } from '@grafana/ui';
+import { Button, Icon, Modal, Tooltip, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import CopyToClipboard from 'react-copy-to-clipboard';
 import Emoji from 'react-emoji-render';
 import { debounce } from 'throttle-debounce';
 
-import MonacoEditor, { MONACO_LANGUAGE } from 'components/MonacoEditor/MonacoEditor';
+import { MonacoEditor, MonacoLanguage } from 'components/MonacoEditor/MonacoEditor';
 import { MONACO_EDITABLE_CONFIG } from 'components/MonacoEditor/MonacoEditor.config';
-import PluginLink from 'components/PluginLink/PluginLink';
-import Text from 'components/Text/Text';
-import { AlertReceiveChannel } from 'models/alert_receive_channel/alert_receive_channel.types';
+import { PluginLink } from 'components/PluginLink/PluginLink';
+import { Text } from 'components/Text/Text';
+import { AlertReceiveChannelHelper } from 'models/alert_receive_channel/alert_receive_channel.helpers';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import styles from 'pages/integration/Integration.module.scss';
 import { useStore } from 'state/useStore';
-import { openNotification } from 'utils';
+import { StackSize } from 'utils/consts';
+import { openNotification } from 'utils/utils';
 
 const cx = cn.bind(styles);
 
 interface IntegrationSendDemoPayloadModalProps {
   isOpen: boolean;
-  alertReceiveChannel: AlertReceiveChannel;
+  alertReceiveChannel: ApiSchemas['AlertReceiveChannel'];
   onHideOrCancel: () => void;
 }
 
-const IntegrationSendDemoAlertModal: React.FC<IntegrationSendDemoPayloadModalProps> = ({
+export const IntegrationSendDemoAlertModal: React.FC<IntegrationSendDemoPayloadModalProps> = ({
   alertReceiveChannel,
   isOpen,
   onHideOrCancel,
@@ -41,18 +43,18 @@ const IntegrationSendDemoAlertModal: React.FC<IntegrationSendDemoPayloadModalPro
       isOpen={isOpen}
       onDismiss={onHideOrCancel}
       title={
-        <HorizontalGroup>
+        <Stack>
           <Text.Title level={4}>
             Send demo alert to integration: {''}
             <strong>
               <Emoji text={alertReceiveChannel.verbal_name} />
             </strong>
           </Text.Title>
-        </HorizontalGroup>
+        </Stack>
       }
     >
-      <VerticalGroup>
-        <HorizontalGroup spacing={'xs'}>
+      <Stack direction="column">
+        <Stack gap={StackSize.xs}>
           <Text type={'secondary'}>Alert Payload</Text>
           <Tooltip
             content={
@@ -65,7 +67,7 @@ const IntegrationSendDemoAlertModal: React.FC<IntegrationSendDemoPayloadModalPro
           >
             <Icon name={'info-circle'} />
           </Tooltip>
-        </HorizontalGroup>
+        </Stack>
 
         <div className={cx('integration__payloadInput')}>
           <MonacoEditor
@@ -73,7 +75,7 @@ const IntegrationSendDemoAlertModal: React.FC<IntegrationSendDemoPayloadModalPro
             disabled={true}
             height={`60vh`}
             useAutoCompleteList={false}
-            language={MONACO_LANGUAGE.json}
+            language={MonacoLanguage.json}
             data={undefined}
             monacoOptions={MONACO_EDITABLE_CONFIG}
             showLineNumbers={false}
@@ -81,18 +83,18 @@ const IntegrationSendDemoAlertModal: React.FC<IntegrationSendDemoPayloadModalPro
           />
         </div>
 
-        <HorizontalGroup justify={'flex-end'} spacing={'md'}>
+        <Stack justifyContent={'flex-end'} gap={StackSize.md}>
           <Button variant={'secondary'} onClick={onHideOrCancel}>
             Cancel
           </Button>
           <CopyToClipboard text={getCurlText()} onCopy={() => openNotification('CURL has been copied')}>
             <Button variant={'secondary'}>Copy as CURL</Button>
           </CopyToClipboard>
-          <Button variant={'primary'} onClick={sendDemoAlert} data-testid="submit-send-alert">
+          <Button variant={'primary'} onClick={onSendAlert} data-testid="submit-send-alert">
             Send Alert
           </Button>
-        </HorizontalGroup>
-      </VerticalGroup>
+        </Stack>
+      </Stack>
     </Modal>
   );
 
@@ -100,17 +102,16 @@ const IntegrationSendDemoAlertModal: React.FC<IntegrationSendDemoPayloadModalPro
     setDemoPayload(value);
   }
 
-  function sendDemoAlert() {
+  async function onSendAlert() {
     let parsedPayload = undefined;
     try {
       parsedPayload = JSON.parse(demoPayload);
     } catch (ex) {}
 
-    alertReceiveChannelStore.sendDemoAlert(alertReceiveChannel.id, parsedPayload).then(() => {
-      alertReceiveChannelStore.updateCounters();
-      openNotification(<DemoNotification />);
-      onHideOrCancel();
-    });
+    await AlertReceiveChannelHelper.sendDemoAlert(alertReceiveChannel.id, parsedPayload);
+    alertReceiveChannelStore.fetchCounters();
+    openNotification(<DemoNotification />);
+    onHideOrCancel();
   }
 
   function getCurlText() {
@@ -130,5 +131,3 @@ const DemoNotification: React.FC = () => {
     </div>
   );
 };
-
-export default IntegrationSendDemoAlertModal;

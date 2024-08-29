@@ -2,6 +2,7 @@ import json
 import typing
 
 from apps.api.permissions import RBACPermission
+from apps.slack.chatops_proxy_routing import make_private_metadata
 from apps.slack.scenarios import scenario_step
 from apps.slack.types import (
     Block,
@@ -17,6 +18,7 @@ from .step_mixins import AlertGroupActionsMixin
 
 if typing.TYPE_CHECKING:
     from apps.slack.models import SlackTeamIdentity, SlackUserIdentity
+    from apps.user_management.models import Organization
 
 
 class OpenAlertAppearanceDialogStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
@@ -26,7 +28,8 @@ class OpenAlertAppearanceDialogStep(AlertGroupActionsMixin, scenario_step.Scenar
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
@@ -63,7 +66,7 @@ class OpenAlertAppearanceDialogStep(AlertGroupActionsMixin, scenario_step.Scenar
                 "type": "plain_text",
                 "text": "Refresh alert group",
             },
-            "private_metadata": json.dumps(private_metadata),
+            "private_metadata": make_private_metadata(private_metadata, alert_receive_channel.organization),
         }
 
         self._slack_client.views_open(trigger_id=payload["trigger_id"], view=view)
@@ -74,7 +77,8 @@ class UpdateAppearanceStep(scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         from apps.alerts.models import AlertGroup
 

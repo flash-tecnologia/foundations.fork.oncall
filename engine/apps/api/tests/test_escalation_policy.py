@@ -56,6 +56,28 @@ def test_create_escalation_policy(escalation_policy_internal_api_setup, make_use
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("wait_delay", (timedelta(seconds=59), timedelta(hours=24, seconds=1)))
+def test_create_escalation_policy_wait_delay_invalid(
+    escalation_policy_internal_api_setup, make_user_auth_headers, wait_delay
+):
+    token, escalation_chain, _, user, _ = escalation_policy_internal_api_setup
+    client = APIClient()
+    url = reverse("api-internal:escalation_policy-list")
+
+    data = {
+        "step": EscalationPolicy.STEP_WAIT,
+        "wait_delay": str(wait_delay.total_seconds()),
+        "escalation_chain": escalation_chain.public_primary_key,
+        "notify_to_users_queue": [],
+        "from_time": None,
+        "to_time": None,
+    }
+
+    response = client.post(url, data, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
 def test_create_escalation_policy_webhook(
     escalation_policy_internal_api_setup, make_custom_webhook, make_user_auth_headers
 ):
@@ -99,6 +121,43 @@ def test_update_notify_multiple_users_step(escalation_policy_internal_api_setup,
     assert sorted(response.json()["notify_to_users_queue"]) == sorted(
         [first_user.public_primary_key, second_user.public_primary_key]
     )
+
+
+@pytest.mark.django_db
+def test_manage_escalation_policy_notify_team(escalation_policy_internal_api_setup, make_team, make_user_auth_headers):
+    token, escalation_chain, _, user, _ = escalation_policy_internal_api_setup
+    client = APIClient()
+    url = reverse("api-internal:escalation_policy-list")
+
+    team = make_team(organization=user.organization)
+    data = {
+        "step": EscalationPolicy.STEP_NOTIFY_TEAM_MEMBERS,
+        "escalation_chain": escalation_chain.public_primary_key,
+        "notify_to_team_members": team.public_primary_key,
+    }
+
+    max_order = EscalationPolicy.objects.filter(escalation_chain=escalation_chain).aggregate(maxorder=Max("order"))[
+        "maxorder"
+    ]
+
+    response = client.post(url, data, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.data["notify_to_team_members"] == team.public_primary_key
+    escalation_policy = EscalationPolicy.objects.get(public_primary_key=response.data["id"])
+    assert escalation_policy.order == max_order + 1
+    assert escalation_policy.notify_to_team_members == team
+
+    # update team in policy
+    url = reverse("api-internal:escalation_policy-detail", kwargs={"pk": escalation_policy.public_primary_key})
+    another_team = make_team(organization=user.organization)
+    data = {
+        "step": EscalationPolicy.STEP_NOTIFY_TEAM_MEMBERS,
+        "notify_to_team_members": another_team.public_primary_key,
+    }
+    response = client.put(url, data, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["step"] == EscalationPolicy.STEP_NOTIFY_TEAM_MEMBERS
+    assert response.json()["notify_to_team_members"] == another_team.public_primary_key
 
 
 @pytest.mark.django_db
@@ -676,7 +735,6 @@ def test_escalation_policy_can_not_create_with_non_step_type_related_data(
         (EscalationPolicy.STEP_NOTIFY_USERS_QUEUE, ["notify_to_users_queue"]),
         (EscalationPolicy.STEP_NOTIFY_IF_TIME, ["from_time", "to_time"]),
         (EscalationPolicy.STEP_NOTIFY_MULTIPLE_USERS, ["notify_to_users_queue"]),
-        (EscalationPolicy.STEP_TRIGGER_CUSTOM_BUTTON, ["custom_button_trigger"]),
         (EscalationPolicy.STEP_TRIGGER_CUSTOM_WEBHOOK, ["custom_webhook"]),
     ],
 )
@@ -713,9 +771,9 @@ def test_escalation_policy_update_drop_non_step_type_related_data(
         "notify_schedule",
         "notify_to_users_queue",
         "notify_to_group",
+        "notify_to_team_members",
         "from_time",
         "to_time",
-        "custom_button_trigger",
         "custom_webhook",
     ]
     for f in related_fields:
@@ -766,10 +824,10 @@ def test_escalation_policy_switch_importance(
         "num_alerts_in_window": None,
         "num_minutes_in_window": None,
         "slack_integration_required": escalation_policy.slack_integration_required,
-        "custom_button_trigger": None,
         "custom_webhook": None,
         "notify_schedule": None,
         "notify_to_group": None,
+        "notify_to_team_members": None,
         "important": True,
         "wait_delay": None,
     }
@@ -823,10 +881,10 @@ def test_escalation_policy_filter_by_user(
             "num_alerts_in_window": None,
             "num_minutes_in_window": None,
             "slack_integration_required": False,
-            "custom_button_trigger": None,
             "custom_webhook": None,
             "notify_schedule": None,
             "notify_to_group": None,
+            "notify_to_team_members": None,
             "important": False,
         },
         {
@@ -840,10 +898,10 @@ def test_escalation_policy_filter_by_user(
             "num_alerts_in_window": None,
             "num_minutes_in_window": None,
             "slack_integration_required": False,
-            "custom_button_trigger": None,
             "custom_webhook": None,
             "notify_schedule": None,
             "notify_to_group": None,
+            "notify_to_team_members": None,
             "important": False,
         },
     ]
@@ -905,10 +963,10 @@ def test_escalation_policy_filter_by_slack_channel(
             "num_alerts_in_window": None,
             "num_minutes_in_window": None,
             "slack_integration_required": False,
-            "custom_button_trigger": None,
             "custom_webhook": None,
             "notify_schedule": None,
             "notify_to_group": None,
+            "notify_to_team_members": None,
             "important": False,
         },
     ]

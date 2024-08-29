@@ -28,6 +28,10 @@ DEV_HELM_FILE = $(DEV_ENV_DIR)/helm-local.yml
 DEV_HELM_USER_SPECIFIC_FILE = $(DEV_ENV_DIR)/helm-local.dev.yml
 
 ENGINE_DIR = ./engine
+VENV_DIR = ./venv
+REQUIREMENTS_DEV_IN = $(ENGINE_DIR)/requirements-dev.in
+REQUIREMENTS_DEV_TXT = $(ENGINE_DIR)/requirements-dev.txt
+REQUIREMENTS_IN = $(ENGINE_DIR)/requirements.in
 REQUIREMENTS_TXT = $(ENGINE_DIR)/requirements.txt
 REQUIREMENTS_ENTERPRISE_TXT = $(ENGINE_DIR)/requirements-enterprise.txt
 SQLITE_DB_FILE = $(ENGINE_DIR)/oncall.db
@@ -104,10 +108,10 @@ define run_ui_docker_command
 	$(call run_docker_compose_command,run --rm oncall_ui sh -c '$(1)')
 endef
 
-# always use settings.ci-test django settings file when running the tests
+# always use settings.ci_test django settings file when running the tests
 # if we use settings.dev it's very possible that some fail just based on the settings alone
 define run_backend_tests
-	$(call run_engine_docker_command,pytest --ds=settings.ci-test $(1))
+	$(call run_engine_docker_command,pytest --ds=settings.ci_test $(1))
 endef
 
 .PHONY: local/up
@@ -152,7 +156,8 @@ build:  ## rebuild images (e.g. when changing requirements.txt)
 cleanup: stop  ## this will remove all of the images, containers, volumes, and networks
                ## associated with your local OnCall developer setup
 	$(call echo_deprecation_message)
-	docker system prune --filter label="$(DOCKER_COMPOSE_DEV_LABEL)" --all --volumes
+	docker system prune --filter label="$(DOCKER_COMPOSE_DEV_LABEL)" --all --volumes --force
+	docker volume prune --filter label="$(DOCKER_COMPOSE_DEV_LABEL)" --all --force
 
 install-pre-commit:
 	@if [ ! -x "$$(command -v pre-commit)" ]; then \
@@ -197,6 +202,15 @@ engine-manage:  ## run Django's `manage.py` script, inside of a docker container
                 ## https://docs.djangoproject.com/en/4.1/ref/django-admin/#django-admin-makemigrations
 	$(call run_engine_docker_command,python manage.py $(CMD))
 
+test-e2e:  ## run the e2e tests in headless mode
+	yarn --cwd grafana-plugin test:e2e
+
+test-e2e-watch:  ## start e2e tests in watch mode
+	yarn --cwd grafana-plugin test:e2e:watch
+
+test-e2e-show-report:  ## open last e2e test report
+	yarn --cwd grafana-plugin playwright show-report
+
 ui-test:  ## run the UI tests
 	$(call run_ui_docker_command,yarn test)
 
@@ -224,23 +238,36 @@ _backend-debug-disable:  ## disable Django's debug mode and Silk profiling
 backend-debug-enable: _backend-debug-enable stop start
 backend-debug-disable: _backend-debug-disable stop start
 
+pip-compile-locked-dependencies:  ## compile engine requirements.txt files
+	$(shell cd engine && uv pip compile requirements.in -o requirements.txt)
+	$(shell cd engine && uv pip compile requirements-dev.in -o requirements-dev.txt)
+
 # The below commands are useful for running backend services outside of docker
 define backend_command
 	export `grep -v '^#' $(DEV_ENV_FILE) | xargs -0` && \
 	export BROKER_TYPE=$(BROKER_TYPE) && \
+	. $(VENV_DIR)/bin/activate && \
 	cd engine && \
 	$(1)
 endef
 
 backend-bootstrap:
-	pip install -U pip wheel
-	pip install -r $(REQUIREMENTS_TXT)
+	python3.12 -m venv $(VENV_DIR)
+	$(VENV_DIR)/bin/pip install -U pip wheel uv
+	$(VENV_DIR)/bin/uv pip sync --python=$(VENV_DIR)/bin/python $(REQUIREMENTS_TXT) $(REQUIREMENTS_DEV_TXT)
 	@if [ -f $(REQUIREMENTS_ENTERPRISE_TXT) ]; then \
-		pip install -r $(REQUIREMENTS_ENTERPRISE_TXT); \
+		$(VENV_DIR)/bin/uv pip install --python=$(VENV_DIR)/bin/python -r $(REQUIREMENTS_ENTERPRISE_TXT); \
 	fi
 
 backend-migrate:
 	$(call backend_command,python manage.py migrate)
+
+backend-compile-deps:
+	uv pip compile --strip-extras $(REQUIREMENTS_IN)
+	uv pip compile --strip-extras $(REQUIREMENTS_DEV_IN)
+
+backend-upgrade-deps:
+	uv pip compile --strip-extras --upgrade $(REQUIREMENTS_IN)
 
 run-backend-server:
 	$(call backend_command,python manage.py runserver 0.0.0.0:8080)

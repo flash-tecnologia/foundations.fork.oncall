@@ -12,7 +12,6 @@ from django.db.models.signals import post_save
 from django.urls import clear_url_caches
 from django.utils import timezone
 from pytest_factoryboy import register
-from rest_framework.test import APIClient
 from telegram import Bot
 
 from apps.alerts.models import (
@@ -29,6 +28,7 @@ from apps.alerts.tests.factories import (
     AlertFactory,
     AlertGroupFactory,
     AlertGroupLogRecordFactory,
+    AlertReceiveChannelConnectionFactory,
     AlertReceiveChannelFactory,
     ChannelFilterFactory,
     CustomActionFactory,
@@ -37,6 +37,7 @@ from apps.alerts.tests.factories import (
     InvitationFactory,
     ResolutionNoteFactory,
     ResolutionNoteSlackMessageFactory,
+    UserNotificationBundleFactory,
 )
 from apps.api.permissions import (
     ACTION_PREFIX,
@@ -45,7 +46,13 @@ from apps.api.permissions import (
     LegacyAccessControlRole,
     RBACPermission,
 )
-from apps.auth_token.models import ApiAuthToken, PluginAuthToken, SlackAuthToken
+from apps.auth_token.models import (
+    ApiAuthToken,
+    GoogleOAuth2Token,
+    IntegrationBacksyncAuthToken,
+    PluginAuthToken,
+    SlackAuthToken,
+)
 from apps.base.models.user_notification_policy_log_record import (
     UserNotificationPolicyLogRecord,
     listen_for_usernotificationpolicylogrecord_model_save,
@@ -56,6 +63,8 @@ from apps.base.tests.factories import (
     UserNotificationPolicyLogRecordFactory,
 )
 from apps.email.tests.factories import EmailMessageFactory
+from apps.google import constants as google_constants
+from apps.google.tests.factories import GoogleOAuth2UserFactory
 from apps.heartbeat.tests.factories import IntegrationHeartBeatFactory
 from apps.labels.tests.factories import (
     AlertGroupAssociatedLabelFactory,
@@ -96,14 +105,18 @@ from apps.user_management.models.user import User, listen_for_user_model_save
 from apps.user_management.tests.factories import OrganizationFactory, RegionFactory, TeamFactory, UserFactory
 from apps.webhooks.presets.preset_options import WebhookPresetOptions
 from apps.webhooks.tests.factories import CustomWebhookFactory, WebhookResponseFactory
-from apps.webhooks.tests.test_webhook_presets import TEST_WEBHOOK_PRESET_ID, TestWebhookPreset
+from apps.webhooks.tests.test_webhook_presets import (
+    ADVANCED_WEBHOOK_PRESET_ID,
+    TEST_WEBHOOK_PRESET_ID,
+    TestAdvancedWebhookPreset,
+    TestWebhookPreset,
+)
 
 register(OrganizationFactory)
 register(UserFactory)
 register(TeamFactory)
-
-
 register(AlertReceiveChannelFactory)
+register(AlertReceiveChannelConnectionFactory)
 register(ChannelFilterFactory)
 register(EscalationPolicyFactory)
 register(OnCallScheduleICalFactory)
@@ -116,37 +129,49 @@ register(AlertGroupLogRecordFactory)
 register(InvitationFactory)
 register(CustomActionFactory)
 register(SlackUserGroupFactory)
-
 register(SlackUserIdentityFactory)
 register(SlackTeamIdentityFactory)
 register(SlackMessageFactory)
-
 register(TelegramToUserConnectorFactory)
 register(TelegramChannelFactory)
 register(TelegramVerificationCodeFactory)
 register(TelegramChannelVerificationCodeFactory)
 register(TelegramMessageFactory)
-
 register(ResolutionNoteSlackMessageFactory)
-
 register(PhoneCallRecordFactory)
 register(SMSRecordFactory)
 register(EmailMessageFactory)
-
 register(IntegrationHeartBeatFactory)
 register(LiveSettingFactory)
-
 register(LabelKeyFactory)
 register(LabelValueFactory)
 register(AlertReceiveChannelAssociatedLabelFactory)
+register(GoogleOAuth2UserFactory)
+register(UserNotificationBundleFactory)
 
 IS_RBAC_ENABLED = os.getenv("ONCALL_TESTING_RBAC_ENABLED", "True") == "True"
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache(settings):
+    """
+    https://github.com/pytest-dev/pytest-django/issues/527#issuecomment-1115887487
+    """
+    cache_version = uuid.uuid4().hex
+
+    for name in settings.CACHES.keys():
+        settings.CACHES[name]["VERSION"] = cache_version
+
+    from django.test.signals import clear_cache_handlers
+
+    clear_cache_handlers(setting="CACHES")
 
 
 @pytest.fixture(autouse=True)
 def mock_slack_api_call(monkeypatch):
     def mock_api_call(*args, **kwargs):
         return {
+            "ts": timezone.now().isoformat(),
             "status": 200,
             "usergroups": [],
             "channel": {"id": "TEST_CHANNEL_ID"},
@@ -186,14 +211,14 @@ def mock_apply_async(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mock_is_labels_feature_enabled(settings):
-    settings.FEATURE_LABELS_ENABLED_FOR_ALL = True
-
-
-@pytest.fixture(autouse=True)
 def clear_ical_users_cache():
     # clear users pks <-> organization cache (persisting between tests)
     memoized_users_in_ical.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def mock_is_labels_feature_enabled(settings):
+    settings.FEATURE_LABELS_ENABLED_FOR_ALL = True
 
 
 @pytest.fixture
@@ -208,7 +233,9 @@ def mock_is_labels_feature_enabled_for_org(settings):
 @pytest.fixture
 def make_organization():
     def _make_organization(**kwargs):
-        return OrganizationFactory(**kwargs, is_rbac_permissions_enabled=IS_RBAC_ENABLED)
+        if "is_rbac_permissions_enabled" not in kwargs:
+            kwargs["is_rbac_permissions_enabled"] = IS_RBAC_ENABLED
+        return OrganizationFactory(**kwargs, is_grafana_labels_enabled=True)
 
     return _make_organization
 
@@ -230,6 +257,14 @@ def make_token_for_organization():
         return PluginAuthToken.create_auth_token(organization)
 
     return _make_token_for_organization
+
+
+@pytest.fixture
+def make_token_for_integration():
+    def _make_token_for_integration(alert_receive_channel, organization):
+        return IntegrationBacksyncAuthToken.create_auth_token(alert_receive_channel, organization)
+
+    return _make_token_for_integration
 
 
 @pytest.fixture
@@ -257,6 +292,14 @@ def make_slack_token_for_user():
 
 
 @pytest.fixture
+def make_google_oauth2_token_for_user():
+    def _make_google_oauth2_token_for_user(user):
+        return GoogleOAuth2Token.create_auth_token(organization=user.organization, user=user)
+
+    return _make_google_oauth2_token_for_user
+
+
+@pytest.fixture
 def make_public_api_token():
     def _make_public_api_token(user, organization, name="test_api_token"):
         return ApiAuthToken.create_auth_token(user, organization, name)
@@ -271,9 +314,11 @@ def make_user_auth_headers():
         token,
         grafana_token: typing.Optional[str] = None,
         grafana_context_data: typing.Optional[typing.Dict] = None,
+        organization=None,
     ):
-        instance_context_headers = {"stack_id": user.organization.stack_id, "org_id": user.organization.org_id}
-        grafana_context_headers = {"UserId": user.user_id}
+        org = organization or user.organization
+        instance_context_headers = {"stack_id": org.stack_id, "org_id": org.org_id}
+        grafana_context_headers = {"UserId": user.user_id if user else None}
         if grafana_token is not None:
             instance_context_headers["grafana_token"] = grafana_token
         if grafana_context_data is not None:
@@ -443,19 +488,6 @@ def make_slack_message():
 
 
 @pytest.fixture
-def client_with_user():
-    def _client_with_user(user):
-        """The client with logged in user"""
-
-        client = APIClient()
-        client.force_login(user)
-
-        return client
-
-    return _client_with_user
-
-
-@pytest.fixture
 def make_team():
     def _make_team(organization, **kwargs):
         team = TeamFactory(organization=organization, **kwargs)
@@ -475,6 +507,19 @@ def make_alert_receive_channel():
         return alert_receive_channel
 
     return _make_alert_receive_channel
+
+
+@pytest.fixture
+def make_alert_receive_channel_connection():
+    def _make_alert_receive_channel_connection(source_alert_receive_channel, connected_alert_receive_channel, **kwargs):
+        alert_receive_channel_connection = AlertReceiveChannelConnectionFactory(
+            source_alert_receive_channel=source_alert_receive_channel,
+            connected_alert_receive_channel=connected_alert_receive_channel,
+            **kwargs,
+        )
+        return alert_receive_channel_connection
+
+    return _make_alert_receive_channel_connection
 
 
 @pytest.fixture
@@ -952,7 +997,10 @@ def shift_swap_request_setup(
 
 @pytest.fixture()
 def webhook_preset_api_setup():
-    WebhookPresetOptions.WEBHOOK_PRESETS = {TEST_WEBHOOK_PRESET_ID: TestWebhookPreset()}
+    WebhookPresetOptions.WEBHOOK_PRESETS = {
+        TEST_WEBHOOK_PRESET_ID: TestWebhookPreset(),
+        ADVANCED_WEBHOOK_PRESET_ID: TestAdvancedWebhookPreset(),
+    }
     WebhookPresetOptions.WEBHOOK_PRESET_CHOICES = [
         preset.metadata for preset in WebhookPresetOptions.WEBHOOK_PRESETS.values()
     ]
@@ -1026,3 +1074,22 @@ def make_webhook_label_association(make_label_key_and_value):
         return WebhookAssociatedLabelFactory(webhook=webhook, organization=organization, key=key, value=value, **kwargs)
 
     return _make_integration_label_association
+
+
+@pytest.fixture
+def make_google_oauth2_user_for_user():
+    def _make_google_oauth2_user_for_user(user, **kwargs):
+        oauth_scope = kwargs.pop("oauth_scope", " ".join(google_constants.REQUIRED_OAUTH_SCOPES))
+        return GoogleOAuth2UserFactory(user=user, oauth_scope=oauth_scope, **kwargs)
+
+    return _make_google_oauth2_user_for_user
+
+
+@pytest.fixture
+def make_user_notification_bundle():
+    def _make_user_notification_bundle(user, notification_channel, important=False, **kwargs):
+        return UserNotificationBundleFactory(
+            user=user, notification_channel=notification_channel, important=important, **kwargs
+        )
+
+    return _make_user_notification_bundle

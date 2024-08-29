@@ -1,6 +1,8 @@
-import dayjs, { ManipulateType } from 'dayjs';
+import { Dayjs, ManipulateType } from 'dayjs';
+import { DraggableData } from 'react-draggable';
 
-import { Timezone } from 'models/timezone/timezone.types';
+import { isTopNavbar } from 'plugin/GrafanaPluginRootPage.helpers';
+import { GRAFANA_HEADER_HEIGHT, GRAFANA_LEGACY_SIDEBAR_WIDTH } from 'utils/consts';
 
 import { RepeatEveryPeriod } from './RotationForm.types';
 
@@ -9,19 +11,6 @@ export const getRepeatShiftsEveryOptions = (repeatEveryPeriod: number) => {
   return Array.from(Array(count + 1).keys())
     .slice(1)
     .map((i) => ({ label: String(i), value: i }));
-};
-
-export const toDate = (moment: dayjs.Dayjs, timezone: Timezone) => {
-  const localMoment = moment.tz(timezone);
-
-  return new Date(
-    localMoment.get('year'),
-    localMoment.get('month'),
-    localMoment.get('date'),
-    localMoment.get('hour'),
-    localMoment.get('minute'),
-    localMoment.get('second')
-  );
 };
 
 export interface TimeUnit {
@@ -170,3 +159,56 @@ export const timeUnitsToSeconds = (units: TimeUnit[]) =>
 export const repeatEveryInSeconds = (repeatEveryPeriod: RepeatEveryPeriod, repeatEveryValue: number) => {
   return repeatEveryPeriodMultiplier[repeatEveryPeriod] * repeatEveryValue;
 };
+
+export const dayJSAddWithDSTFixed = ({
+  baseDate,
+  addParams,
+}: {
+  baseDate: Dayjs;
+  addParams: Parameters<Dayjs['add']>;
+}) => {
+  // At first we add time as usual
+  let newDateCandidate = baseDate.add(...addParams);
+
+  // tz() called with no params makes dayjs use the proper timezone, and not to reset to the current
+  const oldUtcOffset = baseDate.tz().utcOffset();
+  const newUtcOffset = newDateCandidate.tz().utcOffset();
+  const diff = newUtcOffset - oldUtcOffset;
+
+  return newDateCandidate.add(diff, 'minutes');
+};
+
+export function getDraggableModalCoordinatesOnInit(
+  data: DraggableData,
+  offsetTop: number
+): {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+} {
+  if (!data) {
+    return undefined;
+  }
+
+  const body = document.body;
+  const baseReferenceElRect = body.getBoundingClientRect();
+  const { innerHeight } = window;
+
+  const { right, bottom } = baseReferenceElRect;
+
+  return isTopNavbar()
+    ? {
+        // values are adjusted by any padding/margin differences
+        left: -data.node.offsetLeft + 12,
+        right: right - (data.node.offsetLeft + data.node.offsetWidth) - 12,
+        top: -offsetTop + GRAFANA_HEADER_HEIGHT + 12,
+        bottom: innerHeight - data.node.offsetHeight - offsetTop - 12,
+      }
+    : {
+        left: -data.node.offsetLeft + 12 + GRAFANA_LEGACY_SIDEBAR_WIDTH,
+        right: right - (data.node.offsetLeft + data.node.offsetWidth) - 12,
+        top: -offsetTop + 12,
+        bottom: bottom - data.node.offsetHeight - offsetTop - 12,
+      };
+}

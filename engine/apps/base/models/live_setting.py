@@ -39,6 +39,7 @@ class LiveSetting(models.Model):
         "EMAIL_HOST_USER",
         "EMAIL_HOST_PASSWORD",
         "EMAIL_USE_TLS",
+        "EMAIL_USE_SSL",
         "EMAIL_FROM_ADDRESS",
         "INBOUND_EMAIL_ESP",
         "INBOUND_EMAIL_DOMAIN",
@@ -70,6 +71,15 @@ class LiveSetting(models.Model):
         "ZVONOK_POSTBACK_STATUS",
         "ZVONOK_POSTBACK_USER_CHOICE",
         "ZVONOK_POSTBACK_USER_CHOICE_ACK",
+        "ZVONOK_VERIFICATION_CAMPAIGN_ID",
+        "EXOTEL_ACCOUNT_SID",
+        "EXOTEL_API_KEY",
+        "EXOTEL_API_TOKEN",
+        "EXOTEL_APP_ID",
+        "EXOTEL_CALLER_ID",
+        "EXOTEL_SMS_SENDER_ID",
+        "EXOTEL_SMS_VERIFICATION_TEMPLATE",
+        "EXOTEL_SMS_DLT_ENTITY_ID",
     )
 
     DESCRIPTIONS = {
@@ -78,6 +88,7 @@ class LiveSetting(models.Model):
         "EMAIL_HOST_USER": "SMTP server user",
         "EMAIL_HOST_PASSWORD": "SMTP server password",
         "EMAIL_USE_TLS": "SMTP enable/disable TLS",
+        "EMAIL_USE_SSL": "SMTP enable/disable SSL. Should be used mutually exclusively with EMAIL_USE_TLS.",
         "EMAIL_FROM_ADDRESS": "Email address used to send emails. If not specified, EMAIL_HOST_USER will be used.",
         "INBOUND_EMAIL_DOMAIN": "Inbound email domain",
         "INBOUND_EMAIL_ESP": (
@@ -167,6 +178,15 @@ class LiveSetting(models.Model):
         "ZVONOK_POSTBACK_STATUS": "'Postback' status (ct_status) query parameter name to validate a postback request.",
         "ZVONOK_POSTBACK_USER_CHOICE": "'Postback' user choice (ct_user_choice) query parameter name (optional).",
         "ZVONOK_POSTBACK_USER_CHOICE_ACK": "'Postback' user choice (ct_user_choice) query parameter value for acknowledge alert group (optional).",
+        "ZVONOK_VERIFICATION_CAMPAIGN_ID": "The phone number verification campaign ID. You can get it after verification campaign creation.",
+        "EXOTEL_ACCOUNT_SID": "Exotel account SID. You can get it in DEVELOPER SETTINGS -> API Settings",
+        "EXOTEL_API_KEY": "API Key (username)",
+        "EXOTEL_API_TOKEN": "API Token (password)",
+        "EXOTEL_APP_ID": "Identifier of the flow (or applet)",
+        "EXOTEL_CALLER_ID": "Exophone / Exotel virtual number",
+        "EXOTEL_SMS_SENDER_ID": "Exotel SMS Sender ID to use for verification SMS",
+        "EXOTEL_SMS_VERIFICATION_TEMPLATE": "SMS text template to be used for sending SMS, add $verification_code as a placeholder for the verification code",
+        "EXOTEL_SMS_DLT_ENTITY_ID": "DLT Entity ID registered with TRAI.",
     }
 
     SECRET_SETTING_NAMES = (
@@ -183,6 +203,8 @@ class LiveSetting(models.Model):
         "TELEGRAM_TOKEN",
         "GRAFANA_CLOUD_ONCALL_TOKEN",
         "ZVONOK_API_KEY",
+        "EXOTEL_ACCOUNT_SID",
+        "EXOTEL_API_TOKEN",
     )
 
     def __str__(self):
@@ -236,7 +258,7 @@ class LiveSetting(models.Model):
 
     @classmethod
     def validate_settings(cls):
-        settings_to_validate = cls.objects.all()
+        settings_to_validate = cls.objects.filter(name__in=cls.AVAILABLE_NAMES)
         for setting in settings_to_validate:
             setting.error = LiveSettingValidator(live_setting=setting).get_error()
             setting.save(update_fields=["error"])

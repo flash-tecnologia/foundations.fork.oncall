@@ -1,32 +1,5 @@
 # Developer quickstart
 
-- [Quick Start using Kubernetes and Tilt (beta)](#quick-start-using-kubernetes-and-tilt-beta)
-- [Running the project with docker-compose](#running-the-project-with-docker-compose)
-  - [`COMPOSE_PROFILES`](#compose_profiles)
-  - [`GRAFANA_IMAGE`](#grafana_image)
-  - [Configuring Grafana](#configuring-grafana)
-  - [Enabling RBAC for OnCall for local development](#enabling-rbac-for-oncall-for-local-development)
-  - [Django Silk Profiling](#django-silk-profiling)
-  - [Running backend services outside Docker](#running-backend-services-outside-docker)
-- [UI E2E Tests](#ui-e2e-tests)
-- [Helm Unit Tests](#helm-unit-tests)
-- [Useful `make` commands](#useful-make-commands)
-- [Setting environment variables](#setting-environment-variables)
-- [Slack application setup](#slack-application-setup)
-- [Update drone build](#update-drone-build)
-- [Troubleshooting](#troubleshooting)
-  - [ld: library not found for -lssl](#ld-library-not-found-for--lssl)
-  - [Could not build wheels for cryptography which use PEP 517 and cannot be installed directly](#could-not-build-wheels-for-cryptography-which-use-pep-517-and-cannot-be-installed-directly)
-  - [django.db.utils.OperationalError: (1366, "Incorrect string value")](#djangodbutilsoperationalerror-1366-incorrect-string-value)
-  - [/bin/sh: line 0: cd: grafana-plugin: No such file or directory](#binsh-line-0-cd-grafana-plugin-no-such-file-or-directory)
-  - [Encountered error while trying to install package - grpcio](#encountered-error-while-trying-to-install-package---grpcio)
-  - [distutils.errors.CompileError: command '/usr/bin/clang' failed with exit code 1](#distutilserrorscompileerror-command-usrbinclang-failed-with-exit-code-1)
-  - [symbol not found in flat namespace '\_EVP_DigestSignUpdate'](#symbol-not-found-in-flat-namespace-_evp_digestsignupdate)
-- [IDE Specific Instructions](#ide-specific-instructions)
-  - [PyCharm](#pycharm)
-- [How to write database migrations](#how-to-write-database-migrations)
-- [Autogenerating TS types based on OpenAPI schema](#autogenerating-ts-types-based-on-openapi-schema)
-
 Related: [How to develop integrations](/engine/config_integrations/README.md)
 
 ## Quick Start using Kubernetes and Tilt (beta)
@@ -38,6 +11,7 @@ Related: [How to develop integrations](/engine/config_integrations/README.md)
 - [Tilt | Kubernetes for Prod, Tilt for Dev](https://tilt.dev/)
 - [tilt-dev/ctlptl: Making local Kubernetes clusters fun and easy to set up](https://github.com/tilt-dev/ctlptl)
 - [Kind](https://kind.sigs.k8s.io)
+- [Node.js v20.x](https://nodejs.org/en/download)
 - [Yarn](https://classic.yarnpkg.com/lang/en/docs/install/#mac-stable)
 
 ### Launch the environment
@@ -61,6 +35,14 @@ Related: [How to develop integrations](/engine/config_integrations/README.md)
      - name: FEATURE_LABELS_ENABLED_FOR_ALL
        value: "True"
    ```
+
+   You can also choose set of resources that will be installed in your local cluster, e.g.:
+
+   ```bash
+   ONCALL_PROFILES=grafana,plugin,backend tilt up
+   ```
+
+   Available profiles are: `grafana,plugin,backend,tests`, by default all the profiles are enabled.
 
 3. Wait until all resources are green and open <http://localhost:3000/a/grafana-oncall-app> (user: oncall, password: oncall)
 
@@ -216,13 +198,11 @@ See the `django-silk` documentation [here](https://github.com/jazzband/django-si
 By default everything runs inside Docker. If you would like to run the backend services outside of Docker
 (for integrating w/ PyCharm for example), follow these instructions:
 
-1. Create a Python 3.11 virtual environment using a method of your choosing (ex.
-   [venv](https://docs.python.org/3.11/library/venv.html) or [pyenv-virtualenv](https://github.com/pyenv/pyenv-virtualenv)).
-   Make sure the virtualenv is "activated".
+1. Make sure you have Python 3.12 installed.
 2. `postgres` is a dependency on some of our Python dependencies (notably `psycopg2`
    ([docs](https://www.psycopg.org/docs/install.html#prerequisites))). Please visit
    [here](https://www.postgresql.org/download/) for installation instructions.
-3. `make backend-bootstrap` - installs all backend dependencies
+3. `make backend-bootstrap` - will create the virtual env and install all backend dependencies
 4. Modify your `.env.dev` by copying the contents of one of `.env.mysql.dev`, `.env.postgres.dev`,
    or `.env.sqlite.dev` into `.env.dev` (you should exclude the `GF_` prefixed environment variables).
 
@@ -236,6 +216,22 @@ By default everything runs inside Docker. If you would like to run the backend s
 - `make run-backend-server` - runs the HTTP server
 - `make run-backend-celery` - runs Celery workers
 
+### Adding or updating Python dependencies
+
+We are using [pip-tools](https://github.com/jazzband/pip-tools) to manage our dependencies. It helps
+making builds deterministic, controlling deps (and indirect deps) upgrades (and versions consistency)
+avoiding unexpected (and potentially breaking) changes.
+
+We keep our direct deps in `requirements.in` from which we generate (through `pip-compile`) the
+`requirements.txt` (where all deps are pinned). We also constrain dev (and enterprise) deps based
+on our base requirements. Check [how to update deps](https://github.com/jazzband/pip-tools?tab=readme-ov-file#updating-requirements).
+
+`pip install -r requirements.txt` will keep working (the difference is that this should never
+bring additional dependencies or different versions not listed there), and when starting an env
+from scratch, it would be the same as running `pip-sync`. `pip-sync` on the other hand will also
+ensure to clean up any deps not listed in the requirements, keeping the env exactly as described
+in `requirements.txt`.
+
 ## UI E2E Tests
 
 We've developed a suite of "end-to-end" integration tests using [Playwright](https://playwright.dev/). These tests
@@ -243,13 +239,18 @@ are run on pull request CI builds. New features should ideally include a new/mod
 
 To run these tests locally simply do the following:
 
-```bash
-npx playwright install  # install playwright dependencies
-cp ./grafana-plugin/e2e-tests/.env.example ./grafana-plugin/e2e-tests/.env
-# you may need to tweak the values in ./grafana-plugin/.env according to your local setup
-cd grafana-plugin
-yarn test:e2e
-```
+1. Install Playwright dependencies with `npx playwright install`
+2. [Launch the environment](#launch-the-environment)
+3. Then you interact with tests in 2 different ways:
+   1. Using `Tilt` - open _E2eTests_ section where you will find 4 buttons:
+      1. Restart headless run (you can configure browsers, reporter and failure allowance there)
+      2. Open watch mode
+      3. Show last HTML report
+      4. Stop (stops any pending e2e test process)
+   2. Using `make`:
+      1. `make test:e2e` to start headless run
+      2. `make test:e2e:watch` to open watch mode
+      3. `make test:e2e:show:report` to open last HTML report
 
 ## Helm unit tests
 
@@ -277,23 +278,6 @@ and also overrides any defaults that are set in other `.env*` files
 ## Slack application setup
 
 For Slack app configuration check our docs: <https://grafana.com/docs/oncall/latest/open-source/#slack-setup>
-
-## Update drone build
-
-The `.drone.yml` build file must be signed when changes are made to it. Follow these steps:
-
-If you have not installed drone CLI follow [these instructions](https://docs.drone.io/cli/install/)
-
-To sign the `.drone.yml` file:
-
-```bash
-export DRONE_SERVER=https://drone.grafana.net
-
-# Get your drone token from https://drone.grafana.net/account
-export DRONE_TOKEN=<Your DRONE_TOKEN>
-
-drone sign --save grafana/oncall .drone.yml
-```
 
 ## Troubleshooting
 
@@ -540,11 +524,11 @@ In order to automate types creation and prevent API usage pitfalls, OnCall proje
 
    ```ts
    import { ApiSchemas } from "network/oncall-api/api.types";
-   import onCallApi from "network/oncall-api/http-client";
+   import { onCallApi } from "network/oncall-api/http-client";
 
    const {
      data: { results },
-   } = await onCallApi.GET("/alertgroups/");
+   } = await onCallApi().GET("/alertgroups/");
    const alertGroups: Array<ApiSchemas["AlertGroup"]> = results;
    ```
 
@@ -588,3 +572,43 @@ In order to automate types creation and prevent API usage pitfalls, OnCall proje
        }
    }
    ```
+
+## System components
+
+```mermaid
+flowchart TD
+    client[Monitoring System]
+    third_party["Slack, Twilio, 
+           3rd party services.."]
+    server[Server]
+    celery[Celery Worker]
+    db[(SQL Database)]
+    redis[("Cache
+            (Redis)")]
+    broker[("AMPQ Broker
+             (Redis or RabbitMQ)")]
+    
+    subgraph OnCall Backend
+    server <--> redis
+    server <--> db
+    server -->|"Schedule tasks 
+                with ETA"| broker
+    broker -->|"Fetch tasks"| celery
+    celery --> db
+
+    end
+    subgraph Grafana Stack
+    plugin["OnCall Frontend 
+            Plugin"]
+    proxy[Plugin Proxy]
+    api[Grafana API]
+    plugin --> proxy --> server
+    api --> server
+    end
+
+    client -->|Alerts| server
+    third_party -->|"Statuses, 
+               events"| server
+    celery -->|"Notifications, 
+                Outgoing Webhooks"| third_party
+```

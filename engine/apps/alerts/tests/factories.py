@@ -5,6 +5,7 @@ from apps.alerts.models import (
     AlertGroup,
     AlertGroupLogRecord,
     AlertReceiveChannel,
+    AlertReceiveChannelConnection,
     ChannelFilter,
     CustomButton,
     EscalationChain,
@@ -12,6 +13,7 @@ from apps.alerts.models import (
     Invitation,
     ResolutionNote,
     ResolutionNoteSlackMessage,
+    UserNotificationBundle,
 )
 from common.utils import UniqueFaker
 
@@ -22,6 +24,11 @@ class AlertReceiveChannelFactory(factory.DjangoModelFactory):
 
     class Meta:
         model = AlertReceiveChannel
+
+
+class AlertReceiveChannelConnectionFactory(factory.DjangoModelFactory):
+    class Meta:
+        model = AlertReceiveChannelConnection
 
 
 class ChannelFilterFactory(factory.DjangoModelFactory):
@@ -79,3 +86,8 @@ class CustomActionFactory(factory.DjangoModelFactory):
 class InvitationFactory(factory.DjangoModelFactory):
     class Meta:
         model = Invitation
+
+
+class UserNotificationBundleFactory(factory.DjangoModelFactory):
+    class Meta:
+        model = UserNotificationBundle

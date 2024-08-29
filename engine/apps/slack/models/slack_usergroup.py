@@ -16,9 +16,10 @@ from apps.slack.errors import (
     SlackAPIPermissionDeniedError,
     SlackAPITokenError,
     SlackAPIUsergroupNotFoundError,
+    SlackAPIUsergroupPaidTeamOnlyError,
 )
-from apps.slack.models import SlackTeamIdentity
-from apps.user_management.models.user import User
+from apps.slack.models import SlackTeamIdentity, SlackUserIdentity
+from apps.user_management.models import User
 from common.public_primary_keys import generate_public_primary_key, increase_public_primary_key_length
 
 if typing.TYPE_CHECKING:
@@ -85,9 +86,11 @@ class SlackUserGroup(models.Model):
             return False
 
     @property
-    def oncall_slack_user_identities(self):
-        users = set(user for schedule in self.oncall_schedules.get_oncall_users().values() for user in schedule)
-        slack_user_identities = []
+    def oncall_slack_user_identities(self) -> list[SlackUserIdentity]:
+        users: set[User] = set(
+            user for schedule in self.oncall_schedules.get_oncall_users().values() for user in schedule
+        )
+        slack_user_identities: list[SlackUserIdentity] = []
         for user in users:
             if user.slack_user_identity is not None:
                 slack_user_identities.append(user.slack_user_identity)
@@ -96,7 +99,7 @@ class SlackUserGroup(models.Model):
 
         return slack_user_identities
 
-    def update_oncall_members(self):
+    def update_oncall_members(self) -> None:
         slack_ids = [slack_user_identity.slack_id for slack_user_identity in self.oncall_slack_user_identities]
         logger.info(f"Updating usergroup {self.slack_id}, members {slack_ids}")
 
@@ -110,23 +113,32 @@ class SlackUserGroup(models.Model):
             logger.info(f"Skipping usergroup {self.slack_id}, already populated correctly")
             return
 
+        logger.info(f"Slack user group {self.slack_id} memberlist in not up-to-date, updating, members {slack_ids}")
+
         try:
             self.update_members(slack_ids)
         except SlackAPIPermissionDeniedError:
             pass
 
-    def update_members(self, slack_ids):
+    def update_members(self, slack_ids: list[str]) -> None:
         sc = SlackClient(self.slack_team_identity, enable_ratelimit_retry=True)
 
         try:
             sc.usergroups_users_update(usergroup=self.slack_id, users=slack_ids)
         except (SlackAPITokenError, SlackAPIUsergroupNotFoundError, SlackAPIInvalidUsersError) as err:
-            logger.warning(f"Slack usergroup update failed: {err}")
-        except SlackAPIError:
+            logger.warning(f"Slack usergroup {self.slack_id} update failed: {err}")
+        except SlackAPIUsergroupPaidTeamOnlyError:
+            logger.warning(
+                f"Slack usergroup {self.slack_id} update failed as this feature is only available for paid teams",
+                exc_info=True,
+            )
+        except SlackAPIError as slack_api_error:
+            logger.warning(f"Slack usergroup {self.slack_id} update failed: {slack_api_error}")
             raise
         else:
             self.members = slack_ids
             self.save(update_fields=("members",))
+            logger.info(f"Saved cached memberlist for slack user group {self.slack_id}, members {slack_ids}")
 
     def get_users_from_members_for_organization(self, organization):
         return organization.users.filter(
@@ -139,7 +151,12 @@ class SlackUserGroup(models.Model):
         sc = SlackClient(slack_team_identity)
         usergroups = sc.usergroups_list()["usergroups"]
 
-        usergroup = [ug for ug in usergroups if ug["id"] == slack_id][0]
+        try:
+            usergroup = [ug for ug in usergroups if ug["id"] == slack_id][0]
+        except IndexError:
+            # user group not found
+            return
+
         try:
             members = sc.usergroups_users_list(usergroup=usergroup["id"])["users"]
         except SlackAPIError:

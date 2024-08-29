@@ -1,90 +1,11 @@
 import uuid
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
 from apps.grafana_plugin.helpers.client import GcomAPIClient
 from apps.grafana_plugin.helpers.gcom import get_instance_ids
 from settings.base import CLOUD_LICENSE_NAME
-
-
-class TestIsRbacEnabledForStack:
-    TEST_FEATURE_TOGGLE = "helloWorld"
-
-    @pytest.mark.parametrize(
-        "gcom_api_response,expected",
-        [
-            (None, False),
-            ({}, False),
-            ({"config": {}}, False),
-            ({"config": {"feature_toggles": {}}}, False),
-            ({"config": {"feature_toggles": {"accessControlOnCall": "false"}}}, False),
-            ({"config": {"feature_toggles": {"accessControlOnCall": "true"}}}, True),
-        ],
-    )
-    @patch("apps.grafana_plugin.helpers.client.GcomAPIClient.api_get")
-    def test_it_returns_based_on_feature_toggle_value(
-        self, mocked_gcom_api_client_api_get, gcom_api_response, expected
-    ):
-        stack_id = 5
-        mocked_gcom_api_client_api_get.return_value = (gcom_api_response, {"status_code": 200})
-
-        api_client = GcomAPIClient("someFakeApiToken")
-        assert api_client.is_rbac_enabled_for_stack(stack_id) == expected
-        assert mocked_gcom_api_client_api_get.called_once_with(f"instances/{stack_id}?config=true")
-
-    @pytest.mark.parametrize(
-        "instance_info_feature_toggles,delimiter,expected",
-        [
-            ({}, " ", False),
-            ({"enable": "foo,bar,baz"}, " ", False),
-            ({"enable": "foo,bar,baz"}, ",", False),
-            ({"enable": f"foo,bar,baz{TEST_FEATURE_TOGGLE}"}, " ", False),
-            ({"enable": f"foo,bar,baz{TEST_FEATURE_TOGGLE}"}, ",", False),
-            ({"enable": f"foo,bar,baz,{TEST_FEATURE_TOGGLE}abc"}, ",", False),
-            ({"enable": f"foo,bar,baz,{TEST_FEATURE_TOGGLE}"}, ",", True),
-        ],
-    )
-    def test_feature_is_enabled_via_enable_key(self, instance_info_feature_toggles, delimiter, expected) -> None:
-        assert (
-            GcomAPIClient("someFakeApiToken")._feature_is_enabled_via_enable_key(
-                instance_info_feature_toggles, self.TEST_FEATURE_TOGGLE, delimiter
-            )
-            == expected
-        )
-
-    @pytest.mark.parametrize(
-        "instance_info,expected",
-        [
-            ({}, False),
-            ({"config": {}}, False),
-            ({"config": {"feature_toggles": {}}}, False),
-            ({"config": {"feature_toggles": {"enable": "foo,bar,baz"}}}, False),
-            ({"config": {"feature_toggles": {TEST_FEATURE_TOGGLE: "false"}}}, False),
-            ({"config": {"feature_toggles": {"enable": f"foo,bar,{TEST_FEATURE_TOGGLE}baz"}}}, False),
-            ({"config": {"feature_toggles": {"enable": f"foo,bar,{TEST_FEATURE_TOGGLE},baz"}}}, True),
-            ({"config": {"feature_toggles": {"enable": f"foo bar {TEST_FEATURE_TOGGLE} baz"}}}, True),
-            ({"config": {"feature_toggles": {"enable": "foo bar baz", TEST_FEATURE_TOGGLE: "true"}}}, True),
-            ({"config": {"feature_toggles": {TEST_FEATURE_TOGGLE: "true"}}}, True),
-            # this case will probably never happen, but lets account for it anyways
-            (
-                {
-                    "config": {
-                        "feature_toggles": {
-                            "enable": f"foo,bar,baz,{TEST_FEATURE_TOGGLE}",
-                            TEST_FEATURE_TOGGLE: "false",
-                        }
-                    }
-                },
-                True,
-            ),
-        ],
-    )
-    def test_feature_toggle_is_enabled(self, instance_info, expected) -> None:
-        assert (
-            GcomAPIClient("someFakeApiToken")._feature_toggle_is_enabled(instance_info, self.TEST_FEATURE_TOGGLE)
-            == expected
-        )
 
 
 def build_paged_responses(page_size, pages, total_items):
@@ -133,6 +54,80 @@ def test_get_instances_pagination(page_size, expected_pages, expected_items):
     assert items == expected_items
 
 
+@patch("apps.grafana_plugin.helpers.client.APIClient.api_get")
+def test_get_instances_pagination_handles_streaming_errors_with_cursor_pagination(mock_api_get):
+    query = GcomAPIClient.ACTIVE_INSTANCE_QUERY
+    page_size = 10
+    next_cursor1 = "abcd1234"
+    next_cursor2 = "efgh5678"
+    instance1 = {"id": "1"}
+    instance2 = {"id": "2"}
+    instance3 = {"id": "3"}
+
+    mock_api_get.side_effect = [
+        ({"items": [instance1], "nextCursor": next_cursor1}, {}),
+        ({"items": [instance2]}, {}),  # failed request for the second page (missing nextCursor key)
+        ({"items": [instance2], "nextCursor": next_cursor2}, {}),  # retried second page request has nextCursor key
+        ({"items": [instance3], "nextCursor": None}, {}),  # last page
+    ]
+    client = GcomAPIClient("someToken")
+
+    objects = []
+    for page in client.get_instances(query, page_size):
+        objects.extend(page["items"])
+
+    assert instance1 in objects
+    assert instance2 in objects
+    assert instance3 in objects
+
+    mock_api_get.assert_has_calls(
+        [
+            call(f"{query}&cursor=0&pageSize={page_size}"),  # 1st page
+            call(f"{query}&cursor={next_cursor1}&pageSize={page_size}"),  # 2nd page, first try
+            call(f"{query}&cursor={next_cursor1}&pageSize={page_size}"),  # 2nd page, retry
+            call(f"{query}&cursor={next_cursor2}&pageSize={page_size}"),  # 3rd page
+        ]
+    )
+
+
+@patch("apps.grafana_plugin.helpers.client.APIClient.api_get")
+def test_get_instances_pagination_doesnt_infinitely_retry_on_streaming_errors(mock_api_get):
+    query = GcomAPIClient.ACTIVE_INSTANCE_QUERY
+    page_size = 10
+    next_cursor1 = "abcd1234"
+    instance1 = {"id": "1"}
+    instance2 = {"id": "2"}
+
+    mock_api_get.side_effect = [
+        ({"items": [instance1], "nextCursor": next_cursor1}, {}),
+        ({"items": [instance2]}, {}),  # failed request for the second page (missing nextCursor key)
+        ({"items": [instance2]}, {}),  # 2nd failed request for the second page
+        ({"items": [instance2]}, {}),  # 3rd failed request for the second page
+        ({"items": [instance2]}, {}),  # 4th failed request for the second page
+    ]
+    client = GcomAPIClient("someToken")
+
+    objects = []
+    for page in client.get_instances(query, page_size):
+        objects.extend(page["items"])
+
+    assert instance1 in objects
+    assert instance2 not in objects
+
+    second_page_call = call(f"{query}&cursor={next_cursor1}&pageSize={page_size}")
+
+    assert len(mock_api_get.mock_calls) == 5
+    mock_api_get.assert_has_calls(
+        [
+            call(f"{query}&cursor=0&pageSize={page_size}"),  # 1st page
+            second_page_call,  # 2nd page, 1st try
+            second_page_call,  # 2nd page, 1st retry
+            second_page_call,  # 2nd page, 2nd retry
+            second_page_call,  # 2nd page, 3rd retry
+        ]
+    )
+
+
 @pytest.mark.parametrize(
     "query, expected_pages, expected_items",
     [
@@ -158,3 +153,28 @@ def test_get_instance_ids_pagination(settings, query, expected_pages, expected_i
         assert item_count == expected_items
         if item_count > 0:
             assert type(next(iter(instance_ids))) is str
+
+
+@pytest.mark.parametrize(
+    "status, is_deleted",
+    [
+        ("deleted", True),
+        ("active", False),
+        ("deleting", False),
+        ("paused", False),
+        ("archived", False),
+        ("archiving", False),
+        ("restoring", False),
+        ("migrating", False),
+        ("migrated", False),
+        ("suspending", False),
+        ("suspended", False),
+        ("pending", False),
+        ("starting", False),
+        ("unknown", False),
+    ],
+)
+def test_cleanup_organization_deleted(status, is_deleted):
+    client = GcomAPIClient("someToken")
+    with patch.object(GcomAPIClient, "api_get", return_value=({"items": [{"status": status}]}, None)):
+        assert client.is_stack_deleted("someStack") == is_deleted

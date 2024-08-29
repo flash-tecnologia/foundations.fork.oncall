@@ -1,54 +1,54 @@
 import React, { useState, useCallback, useMemo } from 'react';
 
 import { SelectableValue } from '@grafana/data';
-import { HorizontalGroup, Button, Modal, Alert, VerticalGroup, Icon } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { Button, Modal, Alert, Stack, Icon, useStyles2 } from '@grafana/ui';
 import dayjs from 'dayjs';
 import { observer } from 'mobx-react';
 
-import Block from 'components/GBlock/Block';
-import Text from 'components/Text/Text';
+import { Block } from 'components/GBlock/Block';
+import { Text } from 'components/Text/Text';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
-import { Alert as AlertType } from 'models/alertgroup/alertgroup.types';
-import { getTimezone } from 'models/user/user.helpers';
-import { UserCurrentlyOnCall } from 'models/user/user.types';
+import { UserHelper } from 'models/user/user.helpers';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { useStore } from 'state/useStore';
-import { UserActions } from 'utils/authorization';
+import { UserActions } from 'utils/authorization/authorization';
+import { StackSize } from 'utils/consts';
 
-import styles from './AddResponders.module.scss';
+import { getAddRespondersStyles } from './AddResponders.styles';
 import { NotificationPolicyValue, UserResponder as UserResponderType } from './AddResponders.types';
-import AddRespondersPopup from './parts/AddRespondersPopup/AddRespondersPopup';
-import NotificationPoliciesSelect from './parts/NotificationPoliciesSelect/NotificationPoliciesSelect';
-import TeamResponder from './parts/TeamResponder/TeamResponder';
-import UserResponder from './parts/UserResponder/UserResponder';
-
-const cx = cn.bind(styles);
+import { AddRespondersPopup } from './parts/AddRespondersPopup/AddRespondersPopup';
+import { NotificationPoliciesSelect } from './parts/NotificationPoliciesSelect/NotificationPoliciesSelect';
+import { TeamResponder } from './parts/TeamResponder/TeamResponder';
+import { UserResponder } from './parts/UserResponder/UserResponder';
 
 type Props = {
   mode: 'create' | 'update';
   hideAddResponderButton?: boolean;
-  existingPagedUsers?: AlertType['paged_users'];
+  existingPagedUsers?: ApiSchemas['AlertGroup']['paged_users'];
   onAddNewParticipant?: (responder: UserResponderType) => Promise<void>;
   generateRemovePreviouslyPagedUserCallback?: (userId: string) => () => Promise<void>;
 };
 
-const LearnMoreAboutNotificationPoliciesLink: React.FC = () => (
-  <a
-    className={cx('learn-more-link')}
-    href="https://grafana.com/docs/oncall/latest/notify/#configure-user-notification-policies"
-    target="_blank"
-    rel="noreferrer"
-  >
-    <Text type="link">
-      <HorizontalGroup spacing="xs">
-        Learn more
-        <Icon name="external-link-alt" />
-      </HorizontalGroup>
-    </Text>
-  </a>
-);
+const LearnMoreAboutNotificationPoliciesLink: React.FC = () => {
+  const styles = useStyles2(getAddRespondersStyles);
+  return (
+    <a
+      className={styles.learnMoreLink}
+      href="https://grafana.com/docs/oncall/latest/notify/#configure-user-notification-policies"
+      target="_blank"
+      rel="noreferrer"
+    >
+      <Text type="link">
+        <Stack gap={StackSize.xs}>
+          Learn more
+          <Icon name="external-link-alt" />
+        </Stack>
+      </Text>
+    </a>
+  );
+};
 
-const AddResponders = observer(
+export const AddResponders = observer(
   ({
     mode,
     hideAddResponderButton,
@@ -57,12 +57,14 @@ const AddResponders = observer(
     generateRemovePreviouslyPagedUserCallback,
   }: Props) => {
     const { directPagingStore } = useStore();
+    const styles = useStyles2(getAddRespondersStyles);
+
     const { selectedTeamResponder, selectedUserResponders } = directPagingStore;
 
     const currentMoment = useMemo(() => dayjs(), []);
     const isCreateMode = mode === 'create';
 
-    const [currentlyConsideredUser, setCurrentlyConsideredUser] = useState<UserCurrentlyOnCall>(null);
+    const [currentlyConsideredUser, setCurrentlyConsideredUser] = useState<ApiSchemas['UserIsCurrentlyOnCall']>(null);
     const [currentlyConsideredUserNotificationPolicy, setCurrentlyConsideredUserNotificationPolicy] =
       useState<NotificationPolicyValue>(NotificationPolicyValue.Default);
 
@@ -108,9 +110,9 @@ const AddResponders = observer(
 
     return (
       <>
-        <div className={cx('body')}>
+        <div className={styles.content}>
           <Block bordered>
-            <HorizontalGroup justify="space-between">
+            <Stack justifyContent="space-between">
               <Text.Title type="primary" level={4}>
                 Participants
               </Text.Title>
@@ -127,10 +129,10 @@ const AddResponders = observer(
                   </Button>
                 </WithPermissionControlTooltip>
               )}
-            </HorizontalGroup>
+            </Stack>
             {(selectedTeamResponder || existingPagedUsers.length > 0 || selectedUserResponders.length > 0) && (
               <>
-                <ul className={cx('responders-list')}>
+                <ul className={styles.respondersList}>
                   {selectedTeamResponder && (
                     <TeamResponder team={selectedTeamResponder} handleDelete={directPagingStore.resetSelectedTeam} />
                   )}
@@ -141,7 +143,7 @@ const AddResponders = observer(
                       disableNotificationPolicySelect
                       handleDelete={generateRemovePreviouslyPagedUserCallback(user.pk)}
                       important={user.important}
-                      data={user as unknown as UserCurrentlyOnCall}
+                      data={user as unknown as ApiSchemas['UserIsCurrentlyOnCall']}
                     />
                   ))}
                   {selectedUserResponders.map((responder, index) => (
@@ -157,6 +159,7 @@ const AddResponders = observer(
                   {selectedUserResponders.length > 0 && (
                     <Alert
                       severity="info"
+                      className={styles.alert}
                       title={
                         (
                           <Text type="primary">
@@ -185,16 +188,17 @@ const AddResponders = observer(
             isOpen
             title="Confirm Participant Invitation"
             onDismiss={closeUserConfirmationModal}
-            className={cx('confirm-participant-invitation-modal')}
+            className={styles.confirmParticipantInvitationModal}
           >
-            <VerticalGroup spacing="md">
+            <Stack direction="column" gap={StackSize.md}>
               {!isCreateMode && (
                 <div>
                   <Text>
                     <Text strong>{currentlyConsideredUser.name || currentlyConsideredUser.username}</Text> (local time{' '}
-                    {currentMoment.tz(getTimezone(currentlyConsideredUser)).format('HH:mm')}) will be notified using
+                    {currentMoment.tz(UserHelper.getTimezone(currentlyConsideredUser)).format('HH:mm')}) will be
+                    notified using
                   </Text>
-                  <div className={cx('confirm-participant-invitation-modal-select')}>
+                  <div className={styles.confirmParticipantInvitationModalSelect}>
                     <NotificationPoliciesSelect
                       important={Boolean(currentlyConsideredUserNotificationPolicy)}
                       onChange={onChangeCurrentlyConsideredUserNotificationPolicy}
@@ -210,20 +214,18 @@ const AddResponders = observer(
                   title="This user is not currently on-call. We don't recommend to page users outside on-call hours."
                 />
               )}
-              <HorizontalGroup justify="flex-end">
+              <Stack justifyContent="flex-end">
                 <Button variant="secondary" onClick={closeUserConfirmationModal}>
                   Cancel
                 </Button>
                 <Button variant="primary" onClick={confirmCurrentlyConsideredUser} data-testid="confirm-non-oncall">
                   Confirm
                 </Button>
-              </HorizontalGroup>
-            </VerticalGroup>
+              </Stack>
+            </Stack>
           </Modal>
         )}
       </>
     );
   }
 );
-
-export default AddResponders;

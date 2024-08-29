@@ -8,6 +8,49 @@ from rest_framework.response import Response
 from rest_framework.test import APIClient
 
 from apps.api.permissions import LegacyAccessControlRole
+from apps.api.serializers.organization import CurrentOrganizationSerializer
+
+mock_banner = {"title": None, "body": None}
+mock_env_status = {
+    "telegram_configured": False,
+    "phone_provider": {
+        "configured": False,
+        "test_sms": False,
+        "test_call": False,
+        "verification_call": False,
+        "verification_sms": False,
+    },
+}
+
+
+@patch.object(CurrentOrganizationSerializer, "get_banner", return_value=mock_banner)
+@patch.object(CurrentOrganizationSerializer, "get_env_status", return_value=mock_env_status)
+@pytest.mark.django_db
+def test_get_organization(
+    mocked_banner,
+    mocked_env_status,
+    make_organization_and_user_with_plugin_token,
+    make_user_auth_headers,
+):
+    organization, user, token = make_organization_and_user_with_plugin_token()
+
+    client = APIClient()
+    url = reverse("api-internal:api-organization")
+    expected_result = {
+        "pk": organization.public_primary_key,
+        "name": organization.org_title,
+        "stack_slug": organization.stack_slug,
+        "slack_team_identity": None,
+        "slack_channel": None,
+        "rbac_enabled": organization.is_rbac_permissions_enabled,
+        "grafana_incident_enabled": organization.is_grafana_incident_enabled,
+        "is_resolution_note_required": False,
+        "env_status": mock_env_status,
+        "banner": mock_banner,
+    }
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == expected_result
 
 
 @pytest.mark.django_db
@@ -187,3 +230,102 @@ def test_organization_get_channel_verification_code_invalid(
     response = client.get(url, format="json", **make_user_auth_headers(tester, token))
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_get_organization_slack_config_checks(
+    make_organization_and_user_with_plugin_token,
+    make_slack_team_identity,
+    make_alert_receive_channel,
+    make_channel_filter,
+    make_user_auth_headers,
+):
+    organization, user, token = make_organization_and_user_with_plugin_token()
+
+    client = APIClient()
+    url = reverse("api-internal:api-organization-config-checks")
+    expected_result = {
+        "is_chatops_connected": False,
+        "is_integration_chatops_connected": False,
+    }
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == expected_result
+
+    # connect Slack
+    slack_team_identity = make_slack_team_identity()
+    organization.slack_team_identity = slack_team_identity
+    organization.save()
+
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    expected_result["is_chatops_connected"] = True
+    assert response.json() == expected_result
+
+    # create integration
+    integration = make_alert_receive_channel(organization)
+
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == expected_result
+
+    # connect integration to Slack (no channel means default channel)
+    channel_filter = make_channel_filter(integration, notify_in_slack=True)
+
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    expected_result["is_integration_chatops_connected"] = True
+    assert response.json() == expected_result
+
+    # connect integration to Slack (set a channel)
+    channel_filter.slack_channel_id = "C123456"
+    channel_filter.save()
+
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    expected_result["is_integration_chatops_connected"] = True
+    assert response.json() == expected_result
+
+
+@pytest.mark.django_db
+def test_get_organization_telegram_config_checks(
+    make_organization_and_user_with_plugin_token,
+    make_telegram_channel,
+    make_alert_receive_channel,
+    make_channel_filter,
+    make_user_auth_headers,
+):
+    organization, user, token = make_organization_and_user_with_plugin_token()
+
+    client = APIClient()
+    url = reverse("api-internal:api-organization-config-checks")
+    expected_result = {
+        "is_chatops_connected": False,
+        "is_integration_chatops_connected": False,
+    }
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == expected_result
+
+    # connect Telegram
+    make_telegram_channel(organization)
+
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    expected_result["is_chatops_connected"] = True
+    assert response.json() == expected_result
+
+    # create integration
+    integration = make_alert_receive_channel(organization)
+
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == expected_result
+
+    # connect integration to Slack
+    make_channel_filter(integration, notify_in_telegram=True)
+
+    response = client.get(url, format="json", **make_user_auth_headers(user, token))
+    assert response.status_code == status.HTTP_200_OK
+    expected_result["is_integration_chatops_connected"] = True
+    assert response.json() == expected_result

@@ -1,9 +1,9 @@
 import dayjs from 'dayjs';
 
-import { User } from 'models/user/user.types';
-import { RootStore } from 'state';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { RootStore } from 'state/rootStore';
 
-import { Event, Layer, Schedule, ScheduleType, Shift, ShiftEvents, ShiftSwap } from './schedule.types';
+import { Event, Layer, Schedule, ScheduleType, ScheduleView, Shift, ShiftEvents, ShiftSwap } from './schedule.types';
 
 export const getFromString = (moment: dayjs.Dayjs) => {
   return moment.format('YYYY-MM-DD');
@@ -63,6 +63,32 @@ export const fillGaps = (events: Event[]) => {
   return newEvents;
 };
 
+export const scheduleViewToDaysInOneRow = {
+  [ScheduleView.OneWeek]: 7,
+  [ScheduleView.TwoWeeks]: 14,
+  [ScheduleView.OneMonth]: 7,
+};
+
+export const getTotalDaysToDisplay = (scheduleView: ScheduleView, calendarStartDate: dayjs.Dayjs) => {
+  switch (scheduleView) {
+    case ScheduleView.OneWeek:
+      return 7;
+    case ScheduleView.TwoWeeks:
+      return 14;
+    case ScheduleView.OneMonth:
+      const firstDayOfCurrentMonth =
+        calendarStartDate.date() === 1 ? calendarStartDate : calendarStartDate.add(1, 'month').startOf('month');
+
+      const lastDayOfCurrentMonth = firstDayOfCurrentMonth.endOf('month');
+
+      const lastDayOfLastWeek = lastDayOfCurrentMonth.endOf('isoWeek');
+
+      const totalDays = lastDayOfLastWeek.diff(calendarStartDate, 'days') + 1;
+
+      return totalDays;
+  }
+};
+
 export const splitToShifts = (events: Event[]) => {
   const shifts: Array<{ shiftId: Shift['id']; priority: Shift['priority_level']; events: Event[] }> = [];
 
@@ -93,7 +119,7 @@ export const enrichEventsWithScheduleData = (events: Event[], schedule: Partial<
 
 export const getPersonalShiftsFromStore = (
   store: RootStore,
-  userPk: User['pk'],
+  userPk: ApiSchemas['User']['pk'],
   startMoment: dayjs.Dayjs
 ): ShiftEvents[] => {
   return store.scheduleStore.personalEvents[userPk]?.[getFromString(startMoment)] as any;
@@ -397,13 +423,13 @@ export const enrichOverrides = (
 
 const L1_COLORS = ['#3D71D9', '#6D609C', '#4D3B72', '#8214A0'];
 
-const L2_COLORS = ['#3CB979', '#188343', '#84362A', '#521913'];
+const L2_COLORS = ['#299C46', '#517A00', '#84362A', '#521913'];
 
 const L3_COLORS = ['#377277', '#638282', '#364E4E', '#423220'];
 
-const OVERRIDE_COLORS = ['#C69B06', '#C2C837'];
+const OVERRIDE_COLORS = ['#EF9C48'];
 
-export const SHIFT_SWAP_COLOR = '#C69B06';
+export const SHIFT_SWAP_COLOR = '#DC7532';
 
 const COLORS = [L1_COLORS, L2_COLORS, L3_COLORS];
 

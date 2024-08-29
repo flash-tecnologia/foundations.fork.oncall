@@ -2,14 +2,16 @@ import React from 'react';
 
 import { InlineField, Input, Legend } from '@grafana/ui';
 
-import GrafanaTeamSelect from 'containers/GrafanaTeamSelect/GrafanaTeamSelect';
+import { GrafanaTeamSelect } from 'containers/GrafanaTeamSelect/GrafanaTeamSelect';
 import { UserSettingsTab } from 'containers/UserSettings/UserSettings.types';
-import { Connectors } from 'containers/UserSettings/parts/connectors';
-import { User } from 'models/user/user.types';
+import { Connectors } from 'containers/UserSettings/parts/connectors/Connectors';
+import { GoogleConnector } from 'containers/UserSettings/parts/connectors/GoogleConnector';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { AppFeature } from 'state/features';
 import { useStore } from 'state/useStore';
 
 interface UserInfoTabProps {
-  id: User['pk'];
+  id: ApiSchemas['User']['pk'];
   onTabChange: (tab: UserSettingsTab) => void;
 }
 
@@ -50,11 +52,17 @@ export const UserInfoTab = (props: UserInfoTabProps) => {
           withoutModal
           defaultValue={storeUser.current_team}
           onSelect={async (value) => {
-            await userStore.updateCurrentUser({ current_team: value });
+            await userStore.updateUser({ pk: storeUser.pk, current_team: value });
             store.grafanaTeamStore.updateItems();
           }}
         />
       </InlineField>
+      {store.hasFeature(AppFeature.GoogleOauth2) && (
+        <>
+          <Legend data-testid="google-calendar-connector-title">Google Calendar</Legend>
+          <GoogleConnector {...props} />
+        </>
+      )}
       <Legend>Notification channels</Legend>
       <Connectors {...props} />
     </>

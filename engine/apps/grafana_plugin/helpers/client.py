@@ -34,7 +34,7 @@ UserPermissionsDict = typing.Dict[str, typing.List[GrafanaAPIPermission]]
 
 
 class GCOMInstanceInfoConfigFeatureToggles(typing.TypedDict):
-    accessControlOnCall: str
+    accessControlOnCall: typing.NotRequired[str]
 
 
 class GCOMInstanceInfoConfig(typing.TypedDict):
@@ -162,8 +162,11 @@ class APIClient:
 class GrafanaAPIClient(APIClient):
     GRAFANA_INCIDENT_PLUGIN = "grafana-incident-app"
     GRAFANA_INCIDENT_PLUGIN_BACKEND_URL_KEY = "backendUrl"
+    GRAFANA_LABELS_PLUGIN = "grafana-labels-app"
 
     USER_PERMISSION_ENDPOINT = f"api/access-control/users/permissions/search?actionPrefix={ACTION_PREFIX}"
+
+    MIN_GRAFANA_TOKEN_LENGTH = 16
 
     class Types:
         class _BaseGrafanaAPIResponse(typing.TypedDict):
@@ -196,7 +199,7 @@ class GrafanaAPIClient(APIClient):
 
         class PluginSettings(typing.TypedDict):
             enabled: bool
-            jsonData: typing.Dict[str, str]
+            jsonData: typing.NotRequired[typing.Dict[str, str]]
 
         class TeamsResponse(_BaseGrafanaAPIResponse):
             teams: typing.List["GrafanaAPIClient.Types.GrafanaTeam"]
@@ -210,7 +213,7 @@ class GrafanaAPIClient(APIClient):
     def check_token(self) -> APIClientResponse:
         return self.api_head("api/org")
 
-    def get_users_permissions(self, rbac_is_enabled_for_org: bool) -> UserPermissionsDict:
+    def get_users_permissions(self) -> typing.Optional[UserPermissionsDict]:
         """
         It is possible that this endpoint may not be available for certain Grafana orgs.
         Ex: for Grafana Cloud orgs whom have pinned their Grafana version to an earlier version
@@ -228,13 +231,9 @@ class GrafanaAPIClient(APIClient):
             }
         }
         """
-        if not rbac_is_enabled_for_org:
-            return {}
         response, _ = self.api_get(self.USER_PERMISSION_ENDPOINT)
-        if response is None:
-            return {}
-        elif isinstance(response, list):
-            return {}
+        if response is None or isinstance(response, list):
+            return None
 
         data: typing.Dict[str, typing.Dict[str, typing.List[str]]] = response
 
@@ -244,9 +243,9 @@ class GrafanaAPIClient(APIClient):
 
         return all_users_permissions
 
-    def is_rbac_enabled_for_organization(self) -> bool:
+    def is_rbac_enabled_for_organization(self) -> tuple[bool, bool]:
         _, resp_status = self.api_head(self.USER_PERMISSION_ENDPOINT)
-        return resp_status["connected"]
+        return resp_status["connected"], resp_status["status_code"] >= status.HTTP_500_INTERNAL_SERVER_ERROR
 
     def get_users(self, rbac_is_enabled_for_org: bool, **kwargs) -> GrafanaUsersWithPermissions:
         users_response, _ = self.api_get("api/org/users", **kwargs)
@@ -258,7 +257,13 @@ class GrafanaAPIClient(APIClient):
 
         users: GrafanaUsersWithPermissions = users_response
 
-        user_permissions = self.get_users_permissions(rbac_is_enabled_for_org)
+        user_permissions = {}
+        if rbac_is_enabled_for_org:
+            user_permissions = self.get_users_permissions()
+            if user_permissions is None:
+                # If we cannot fetch permissions when RBAC is enabled (ex. HTTP 500), we should not return any users
+                # to avoid potentially wiping-out OnCall's copy of permissions for all users
+                return []
 
         # merge the users permissions response into the org users response
         for user in users:
@@ -302,6 +307,9 @@ class GrafanaAPIClient(APIClient):
     def get_grafana_incident_plugin_settings(self) -> APIClientResponse["GrafanaAPIClient.Types.PluginSettings"]:
         return self.get_grafana_plugin_settings(self.GRAFANA_INCIDENT_PLUGIN)
 
+    def get_grafana_labels_plugin_settings(self) -> APIClientResponse["GrafanaAPIClient.Types.PluginSettings"]:
+        return self.get_grafana_plugin_settings(self.GRAFANA_LABELS_PLUGIN)
+
     def get_service_account(self, login: str) -> APIClientResponse["GrafanaAPIClient.Types.ServiceAccountResponse"]:
         return self.api_get(f"api/serviceaccounts/search?query={login}")
 
@@ -320,6 +328,17 @@ class GrafanaAPIClient(APIClient):
 
     def get_service_account_token_permissions(self) -> APIClientResponse[typing.Dict[str, typing.List[str]]]:
         return self.api_get("api/access-control/user/permissions")
+
+    def sync(self) -> APIClientResponse:
+        return self.api_post("api/plugins/grafana-oncall-app/resources/plugin/sync")
+
+    @staticmethod
+    def validate_grafana_token_format(grafana_token: str) -> bool:
+        if not grafana_token or not isinstance(grafana_token, str):
+            return False
+        if len(grafana_token) < GrafanaAPIClient.MIN_GRAFANA_TOKEN_LENGTH:
+            return False
+        return True
 
 
 class GcomAPIClient(APIClient):
@@ -345,70 +364,58 @@ class GcomAPIClient(APIClient):
         data, _ = self.api_get(url)
         return data
 
-    def _feature_is_enabled_via_enable_key(
-        self, instance_feature_toggles: GCOMInstanceInfoConfigFeatureToggles, feature_name: str, delimiter: str
-    ):
-        return feature_name in instance_feature_toggles.get("enable", "").split(delimiter)
-
-    def _feature_toggle_is_enabled(self, instance_info: GCOMInstanceInfo, feature_name: str) -> bool:
-        """
-        there are two ways that feature toggles can be enabled, this method takes into account both
-        https://grafana.com/docs/grafana/latest/setup-grafana/configure-grafana/#enable
-        """
-        instance_info_config = instance_info.get("config", {})
-        if not instance_info_config:
-            return False
-
-        instance_feature_toggles = instance_info_config.get("feature_toggles", {})
-
-        if not instance_feature_toggles:
-            return False
-
-        # features enabled via enable key can be either space or comma delimited
-        # https://raintank-corp.slack.com/archives/C036J5B39/p1690183217162019
-
-        feature_enabled_via_enable_key_space_delimited = self._feature_is_enabled_via_enable_key(
-            instance_feature_toggles, feature_name, " "
-        )
-        feature_enabled_via_enable_key_comma_delimited = self._feature_is_enabled_via_enable_key(
-            instance_feature_toggles, feature_name, ","
-        )
-        feature_enabled_via_direct_key = instance_feature_toggles.get(feature_name, "false") == "true"
-
-        return (
-            feature_enabled_via_direct_key
-            or feature_enabled_via_enable_key_space_delimited
-            or feature_enabled_via_enable_key_comma_delimited
-        )
-
-    def is_rbac_enabled_for_stack(self, stack_id: str) -> bool:
-        """
-        NOTE: must use an "Admin" GCOM token when calling this method
-        """
-        instance_info = self.get_instance_info(stack_id, True)
-        if not instance_info:
-            return False
-        return self._feature_toggle_is_enabled(instance_info, "accessControlOnCall")
-
     def get_instances(self, query: str, page_size=None):
+        MAX_RETRIES = 3
+
         if not page_size:
             page, _ = self.api_get(query)
             yield page
         else:
+            previous_cursor = None
+            retry_count = 0
             cursor = 0
+
             while cursor is not None:
-                if query:
-                    page_query = query + f"&cursor={cursor}&pageSize={page_size}"
+                previous_cursor = cursor
+                page, call_status = self.api_get(f"{query}&cursor={cursor}&pageSize={page_size}")
+
+                if "nextCursor" in page:
+                    cursor = page["nextCursor"]
+                    yield page
+                elif retry_count == MAX_RETRIES:
+                    break
                 else:
-                    page_query = f"?cursor={cursor}&pageSize={page_size}"
-                page, _ = self.api_get(page_query)
-                yield page
-                cursor = page["nextCursor"]
+                    # nextCursor is missing from the response JSON, lets retry the request..
+                    #
+                    # NOTE: this is here because there seems to be a bug in GCOM's API where when using cursor based
+                    # pagination, the request is aborted on the GCOM side but still sends HTTP 200 w/ a partial
+                    # JSON response. This was leading to KeyErrors when trying to read the nextCursor key.
+                    #
+                    # How the JSON is actually properly decoded is aside me 🤷‍♂️, but for now lets simply retry the
+                    # request if this scenario arises
+                    #
+                    # See this conversation for more context
+                    # https://raintank-corp.slack.com/archives/C0K031RP1/p1723158123932529
+                    logger.warning(
+                        f"GcomAPIClient.get_instances response was missing nextCursor key, likely a decoding error. "
+                        f"http_response={page} call_status={call_status}"
+                    )
+                    cursor = previous_cursor  # retry the request using the previous nextCursor value
+                    retry_count += 1
+
+    def _is_stack_in_certain_state(self, stack_id: str, state: str) -> bool:
+        instance_info = self.get_instance_info(stack_id)
+        if not instance_info:
+            return False
+        return instance_info.get("status") == state
 
     def is_stack_deleted(self, stack_id: str) -> bool:
         url = f"instances?includeDeleted=true&id={stack_id}"
         instance_infos, _ = self.api_get(url)
         return instance_infos["items"] and instance_infos["items"][0].get("status") == self.STACK_STATUS_DELETED
+
+    def is_stack_active(self, stack_id: str) -> bool:
+        return self._is_stack_in_certain_state(stack_id, self.STACK_STATUS_ACTIVE)
 
     def post_active_users(self, body) -> APIClientResponse:
         return self.api_post("app-active-users", body)

@@ -1,6 +1,7 @@
-import time
+from datetime import timedelta
 
 from django.core.exceptions import ObjectDoesNotExist
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import fields, serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.relations import RelatedField
@@ -11,6 +12,7 @@ from common.api_helpers.exceptions import BadRequest
 from common.timezones import raise_exception_if_not_valid_timezone
 
 
+@extend_schema_field(serializers.CharField)
 class OrganizationFilteredPrimaryKeyRelatedField(RelatedField):
     """
     This field is used to filter entities by organization
@@ -44,6 +46,7 @@ class OrganizationFilteredPrimaryKeyRelatedField(RelatedField):
         return self.display_func(instance)
 
 
+@extend_schema_field(serializers.CharField)
 class TeamPrimaryKeyRelatedField(RelatedField):
     """
     This field is used to get user teams
@@ -102,23 +105,23 @@ class UsersFilteredByOrganizationField(serializers.Field):
         return queryset.filter(organization=request.user.organization, public_primary_key__in=data).distinct()
 
 
-class CustomTimeField(fields.TimeField):
-    def to_representation(self, value):
-        result = super().to_representation(value)
-        if result[-1] != "Z":
-            result += "Z"
-        return result
+class IntegrationFilteredByOrganizationField(serializers.RelatedField):
+    def get_queryset(self):
+        request = self.context.get("request", None)
+        if not request:
+            return None
+        return request.user.organization.alert_receive_channels.all()
 
     def to_internal_value(self, data):
-        TIME_FORMAT_LEN = len("00:00:00Z")
-        if len(data) == TIME_FORMAT_LEN:
-            try:
-                time.strptime(data, "%H:%M:%SZ")
-            except ValueError:
-                raise BadRequest(detail="Invalid time format, should be '00:00:00Z'")
-        else:
-            raise BadRequest(detail="Invalid time format, should be '00:00:00Z'")
-        return data
+        try:
+            return self.get_queryset().get(public_primary_key=data)
+        except ObjectDoesNotExist:
+            raise ValidationError("Integration does not exist")
+        except (TypeError, ValueError):
+            raise ValidationError("Invalid integration")
+
+    def to_representation(self, value):
+        return value.public_primary_key
 
 
 class RouteIdField(fields.CharField):
@@ -204,3 +207,11 @@ class TimeZoneAwareDatetimeField(serializers.DateTimeField):
             ],
             **kwargs,
         )
+
+
+class DurationSecondsField(serializers.FloatField):
+    def to_internal_value(self, data):
+        return timedelta(seconds=int(super().to_internal_value(data)))
+
+    def to_representation(self, value):
+        return str(value.total_seconds())

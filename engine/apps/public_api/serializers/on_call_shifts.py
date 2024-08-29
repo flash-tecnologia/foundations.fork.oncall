@@ -1,3 +1,4 @@
+import datetime
 import time
 
 from rest_framework import fields, serializers
@@ -123,13 +124,13 @@ class CustomOnCallShiftSerializer(EagerLoadingMixin, serializers.ModelSerializer
     PREFETCH_RELATED = ["schedules", "users"]
 
     def create(self, validated_data):
+        validated_data = self._correct_validated_data(validated_data["type"], validated_data)
         self._validate_frequency_and_week_start(
             validated_data["type"],
             validated_data.get("frequency"),
-            validated_data.get("interval", 1),  # if field is missing, the default value will be used
+            validated_data.get("interval"),
             validated_data.get("week_start"),
         )
-        validated_data = self._correct_validated_data(validated_data["type"], validated_data)
         self._validate_start_rotation_from_user_index(
             validated_data["type"],
             validated_data.get("start_rotation_from_user_index"),
@@ -345,8 +346,10 @@ class CustomOnCallShiftSerializer(EagerLoadingMixin, serializers.ModelSerializer
             if isinstance(validated_data.get(field), list) and len(validated_data[field]) == 0:
                 validated_data[field] = None
         if validated_data.get("start") is not None:
-            validated_data["start"] = validated_data["start"].replace(tzinfo=None)
-        if validated_data.get("frequency") and validated_data.get("interval") is None:
+            # store start date as UTC, TZ is really given by the time_zone field
+            # (see apps/schedules/models/custom_on_call_shift.py::convert_dt_to_schedule_timezone)
+            validated_data["start"] = validated_data["start"].replace(tzinfo=datetime.timezone.utc)
+        if validated_data.get("frequency") is not None and "interval" not in validated_data:
             # if there is frequency but no interval is given, default to 1
             validated_data["interval"] = 1
 
@@ -374,6 +377,7 @@ class CustomOnCallShiftUpdateSerializer(CustomOnCallShiftSerializer):
 
     def update(self, instance, validated_data):
         event_type = validated_data.get("type", instance.type)
+        validated_data = self._correct_validated_data(event_type, validated_data)
         frequency = validated_data.get("frequency", instance.frequency)
         start_rotation_from_user_index = validated_data.get(
             "start_rotation_from_user_index", instance.start_rotation_from_user_index
@@ -389,7 +393,6 @@ class CustomOnCallShiftUpdateSerializer(CustomOnCallShiftSerializer):
 
         if start_rotation_from_user_index != instance.start_rotation_from_user_index:
             self._validate_start_rotation_from_user_index(event_type, start_rotation_from_user_index)
-        validated_data = self._correct_validated_data(event_type, validated_data)
         result = super().update(instance, validated_data)
         for schedule in instance.schedules.all():
             instance.start_drop_ical_and_check_schedule_tasks(schedule)

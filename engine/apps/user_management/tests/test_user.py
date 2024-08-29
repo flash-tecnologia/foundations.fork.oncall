@@ -4,6 +4,8 @@ import pytest
 from django.utils import timezone
 
 from apps.api.permissions import LegacyAccessControlRole
+from apps.google import constants as google_constants
+from apps.google.models import GoogleOAuth2User
 from apps.user_management.models import User
 
 
@@ -100,3 +102,118 @@ def test_is_in_working_hours_weekend(make_organization, make_user_for_organizati
 
     on_saturday = timezone.datetime(2023, 8, 5, 12, 0, 0, tzinfo=datetime.timezone.utc)
     assert user.is_in_working_hours(on_saturday, "UTC") is False
+
+
+@pytest.mark.django_db
+def test_is_telegram_connected(make_organization_and_user, make_telegram_user_connector):
+    _, user = make_organization_and_user()
+    assert user.is_telegram_connected is False
+    make_telegram_user_connector(user)
+    assert user.is_telegram_connected is True
+
+
+@pytest.mark.django_db
+def test_has_google_oauth2_connected(make_organization_and_user, make_google_oauth2_user_for_user):
+    _, user = make_organization_and_user()
+
+    assert user.has_google_oauth2_connected is False
+    make_google_oauth2_user_for_user(user)
+    assert user.has_google_oauth2_connected is True
+
+
+@pytest.mark.django_db
+def test_google_oauth2_token_is_missing_scopes(make_organization_and_user, make_google_oauth2_user_for_user):
+    initial_granted_scope = "foo bar baz"
+    initial_oauth_response = {
+        "access_token": "access",
+        "refresh_token": "refresh",
+        "sub": "google_user_id",
+        "scope": initial_granted_scope,
+    }
+
+    _, user = make_organization_and_user()
+
+    # false because the user hasn't yet connected their google account
+    assert user.google_oauth2_token_is_missing_scopes is False
+
+    user.save_google_oauth2_settings(initial_oauth_response)
+    user.refresh_from_db()
+
+    # true because we're missing a granted scope
+    assert user.google_oauth2_token_is_missing_scopes is True
+
+    user.save_google_oauth2_settings(
+        {
+            **initial_oauth_response,
+            "scope": f"{initial_granted_scope} {' '.join(google_constants.REQUIRED_OAUTH_SCOPES)}",
+        }
+    )
+    user.refresh_from_db()
+
+    # False because we now have all the required scopes
+    assert user.google_oauth2_token_is_missing_scopes is False
+
+
+@pytest.mark.django_db
+def test_save_google_oauth2_settings(make_organization_and_user):
+    oauth_response = {
+        "access_token": "access",
+        "refresh_token": "refresh",
+        "sub": "google_user_id",
+        "scope": "scope",
+    }
+
+    _, user = make_organization_and_user()
+
+    assert GoogleOAuth2User.objects.filter(user=user).exists() is False
+    assert user.google_calendar_settings is None
+
+    user.save_google_oauth2_settings(oauth_response)
+    user.refresh_from_db()
+
+    google_oauth_user = user.google_oauth2_user
+    assert google_oauth_user.google_user_id == "google_user_id"
+    assert google_oauth_user.access_token == "access"
+    assert google_oauth_user.refresh_token == "refresh"
+    assert google_oauth_user.oauth_scope == "scope"
+    assert user.google_calendar_settings["oncall_schedules_to_consider_for_shift_swaps"] == []
+
+    oauth_response2 = {
+        "access_token": "access2",
+        "refresh_token": "refresh2",
+        "sub": "google_user_id2",
+        "scope": "scope2",
+    }
+
+    user.save_google_oauth2_settings(oauth_response2)
+    user.refresh_from_db()
+
+    google_oauth_user = user.google_oauth2_user
+    assert google_oauth_user.google_user_id == "google_user_id2"
+    assert google_oauth_user.access_token == "access2"
+    assert google_oauth_user.refresh_token == "refresh2"
+    assert google_oauth_user.oauth_scope == "scope2"
+
+
+@pytest.mark.django_db
+def test_reset_google_oauth2_settings(make_organization_and_user):
+    _, user = make_organization_and_user()
+
+    user.save_google_oauth2_settings(
+        {
+            "access_token": "access",
+            "refresh_token": "refresh",
+            "sub": "google_user_id",
+            "scope": "scope",
+        }
+    )
+    user.refresh_from_db()
+
+    assert user.google_oauth2_user is not None
+    assert user.google_calendar_settings is not None
+
+    user.reset_google_oauth2_settings()
+    user.refresh_from_db()
+
+    assert GoogleOAuth2User.objects.filter(user=user).exists() is False
+    assert user.google_calendar_settings is None

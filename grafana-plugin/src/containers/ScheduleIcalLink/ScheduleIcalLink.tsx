@@ -1,14 +1,14 @@
 import React, { FC, useEffect, useState } from 'react';
 
-import { Button, HorizontalGroup, Icon, Label, LoadingPlaceholder, VerticalGroup } from '@grafana/ui';
+import { Button, Icon, Label, LoadingPlaceholder, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 import CopyToClipboard from 'react-copy-to-clipboard';
 
-import Text from 'components/Text/Text';
+import { Text } from 'components/Text/Text';
 import { CreateScheduleExportTokenResponse, Schedule } from 'models/schedule/schedule.types';
 import { useStore } from 'state/useStore';
-import { openNotification } from 'utils';
+import { openNotification } from 'utils/utils';
 
 import styles from './ScheduleIcalLink.module.css';
 
@@ -18,32 +18,31 @@ interface ScheduleICalSettingsProps {
   id: Schedule['id'];
 }
 
-const ScheduleICalSettings: FC<ScheduleICalSettingsProps> = observer((props) => {
+export const ScheduleICalSettings: FC<ScheduleICalSettingsProps> = observer((props) => {
   const { id } = props;
   const store = useStore();
 
   const [ICalLink, setICalLink] = useState<string>(undefined);
-  const [isiCalLinkExist, setIsICalLinkExist] = useState<boolean>(false);
-  const [isICalLinkLoading, setIsICalLinkLoading] = useState<boolean>(true);
+  const [isiCalLinkExist, setIsICalLinkExist] = useState(false);
+  const [isICalLinkLoading, setIsICalLinkLoading] = useState(true);
 
   useEffect(() => {
-    store.scheduleStore
-      .getICalLink(id)
-      .then(() => {
+    (async () => {
+      try {
+        await store.scheduleStore.getICalLink(id);
         setIsICalLinkExist(true);
         setIsICalLinkLoading(false);
-      })
-      .catch(() => {
+      } catch (_err) {
         setIsICalLinkExist(false);
         setIsICalLinkLoading(false);
-      });
+      }
+    })();
   }, []);
 
   const handleCreateICalLink = async () => {
     setIsICalLinkExist(true);
-    await store.scheduleStore
-      .createICalLink(id)
-      .then((res: CreateScheduleExportTokenResponse) => setICalLink(res?.export_url));
+    const res: CreateScheduleExportTokenResponse = await store.scheduleStore.createICalLink(id);
+    setICalLink(res?.export_url);
   };
 
   const handleRevokeICalLink = async () => {
@@ -53,7 +52,7 @@ const ScheduleICalSettings: FC<ScheduleICalSettingsProps> = observer((props) => 
   };
 
   return (
-    <VerticalGroup>
+    <Stack direction="column">
       <Label>iCal link:</Label>
       <Text type="secondary">
         Secret iCal export link to export schedule's on call shifts to Google Calendar, iCal, etc. If you forget it,
@@ -69,11 +68,11 @@ const ScheduleICalSettings: FC<ScheduleICalSettingsProps> = observer((props) => 
           {isiCalLinkExist ? (
             <>
               {ICalLink !== undefined ? (
-                <VerticalGroup>
-                  <HorizontalGroup>
+                <Stack direction="column">
+                  <Stack>
                     <Icon name="exclamation-triangle" />
                     <Text type="warning">Make sure you copy it - you won't be able to access it again.</Text>
-                  </HorizontalGroup>
+                  </Stack>
                   <Text className={cx('link-container')}>{ICalLink}</Text>
                   <CopyToClipboard
                     text={ICalLink}
@@ -85,16 +84,16 @@ const ScheduleICalSettings: FC<ScheduleICalSettingsProps> = observer((props) => 
                       Copy iCal link
                     </Button>
                   </CopyToClipboard>
-                </VerticalGroup>
+                </Stack>
               ) : (
-                <VerticalGroup>
+                <Stack direction="column">
                   <Text type="secondary">
                     In case you lost your iCal link you can revoke it and generate a new one.
                   </Text>
                   <Button icon="trash-alt" onClick={handleRevokeICalLink} variant="destructive" fill="outline">
                     Revoke iCal link
                   </Button>
-                </VerticalGroup>
+                </Stack>
               )}
             </>
           ) : (
@@ -104,8 +103,6 @@ const ScheduleICalSettings: FC<ScheduleICalSettingsProps> = observer((props) => 
           )}
         </>
       )}
-    </VerticalGroup>
+    </Stack>
   );
 });
-
-export default ScheduleICalSettings;

@@ -1,7 +1,16 @@
 ---
-canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/
 title: Grafana OnCall HTTP API reference
-weight: 1500
+menuTitle: API reference
+description: Reference material for Grafana OnCall API.
+weight: 0
+keywords:
+  - OnCall
+  - API
+  - HTTP
+  - API key
+canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/
+aliases:
+  - /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/
 ---
 
 # HTTP API Reference
@@ -27,6 +36,8 @@ Grafana OnCall uses API keys to allow access to the API. You can request a new O
 
 An API key is specific to a user and a Grafana stack. If you want to switch to a different stack configuration,
 request a different API key.
+
+The endpoint refers to the OnCall Application endpoint and can be found on the OnCall -> Settings page as well.
 
 ## Pagination
 

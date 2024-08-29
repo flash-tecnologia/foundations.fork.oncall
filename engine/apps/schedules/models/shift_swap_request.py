@@ -5,10 +5,13 @@ from django.conf import settings
 from django.core.validators import MinLengthValidator
 from django.db import models
 from django.db.models import QuerySet
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from django.utils import timezone
 
 from apps.schedules import exceptions
 from apps.schedules.tasks import refresh_ical_final_schedule
+from common.insight_log import EntityEvent, write_resource_insight_log
 from common.public_primary_keys import generate_public_primary_key, increase_public_primary_key_length
 
 if typing.TYPE_CHECKING:
@@ -45,7 +48,9 @@ class ShiftSwapRequestManager(models.Manager):
         return self.get_queryset().hard_delete()
 
     def get_open_requests(self, now):
-        return self.get_queryset().filter(benefactor__isnull=True, swap_start__gt=now)
+        return self.get_queryset().filter(
+            schedule__organization__deleted_at__isnull=True, benefactor__isnull=True, swap_start__gt=now
+        )
 
 
 class ShiftSwapRequest(models.Model):
@@ -256,3 +261,14 @@ class ShiftSwapRequest(models.Model):
         result["schedule"] = self.schedule.insight_logs_verbal
         result["schedule_id"] = self.schedule.public_primary_key
         return result
+
+
+@receiver(post_save, sender=ShiftSwapRequest)
+def listen_for_shiftswaprequest_model_save(
+    sender: ShiftSwapRequest, instance: ShiftSwapRequest, created: bool, *args, **kwargs
+) -> None:
+    from apps.schedules.tasks.shift_swaps import create_shift_swap_request_message
+
+    if created:
+        write_resource_insight_log(instance=instance, author=instance.beneficiary, event=EntityEvent.CREATED)
+        create_shift_swap_request_message.apply_async((instance.pk,))

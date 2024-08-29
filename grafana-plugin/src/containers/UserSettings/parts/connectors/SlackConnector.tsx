@@ -1,19 +1,21 @@
 import React, { useCallback, useMemo } from 'react';
 
-import { Button, HorizontalGroup, InlineField, Input } from '@grafana/ui';
+import { Button, InlineField, Input, Stack } from '@grafana/ui';
+import { observer } from 'mobx-react';
 
-import WithConfirm from 'components/WithConfirm/WithConfirm';
+import { WithConfirm } from 'components/WithConfirm/WithConfirm';
 import { UserSettingsTab } from 'containers/UserSettings/UserSettings.types';
-import { User } from 'models/user/user.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { useStore } from 'state/useStore';
+import { StackSize } from 'utils/consts';
 import { getPathFromQueryParams } from 'utils/url';
 
 interface SlackConnectorProps {
-  id: User['pk'];
+  id: ApiSchemas['User']['pk'];
   onTabChange: (tab: UserSettingsTab) => void;
 }
 
-const SlackConnector = (props: SlackConnectorProps) => {
+export const SlackConnector = observer((props: SlackConnectorProps) => {
   const { id, onTabChange } = props;
 
   const store = useStore();
@@ -43,7 +45,7 @@ const SlackConnector = (props: SlackConnectorProps) => {
             labelWidth={12}
             tooltip={'Connected Slack user will receive mentions during escalations'}
           >
-            <HorizontalGroup spacing="xs">
+            <Stack gap={StackSize.xs}>
               <Input
                 disabled={true}
                 value={
@@ -58,7 +60,7 @@ const SlackConnector = (props: SlackConnectorProps) => {
                   disabled={!isCurrentUser}
                 />
               </WithConfirm>
-            </HorizontalGroup>
+            </Stack>
           </InlineField>
         </>
       ) : organizationStore.currentOrganization?.slack_team_identity ? (
@@ -93,6 +95,4 @@ const SlackConnector = (props: SlackConnectorProps) => {
       )}
     </>
   );
-};
-
-export default SlackConnector;
+});

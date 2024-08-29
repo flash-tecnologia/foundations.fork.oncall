@@ -1,7 +1,7 @@
 import logging
 from typing import Optional, TypedDict
 
-from anymail.exceptions import AnymailWebhookValidationFailure
+from anymail.exceptions import AnymailInvalidAddress, AnymailWebhookValidationFailure
 from anymail.inbound import AnymailInboundMessage
 from anymail.signals import AnymailInboundEvent
 from anymail.webhooks import amazon_ses, mailgun, mailjet, mandrill, postal, postmark, sendgrid, sparkpost
@@ -86,9 +86,18 @@ class InboundEmailWebhookView(AlertChannelDefiningMixin, APIView):
         # First try envelope_recipient field.
         # According to AnymailInboundMessage it's provided not by all ESPs.
         if message.envelope_recipient:
-            token, domain = message.envelope_recipient.split("@")
-            if domain == live_settings.INBOUND_EMAIL_DOMAIN:
-                return token
+            recipients = message.envelope_recipient.split(",")
+            for recipient in recipients:
+                # if there is more than one recipient, the first matching the expected domain will be used
+                try:
+                    token, domain = recipient.strip().split("@")
+                except ValueError:
+                    logger.error(
+                        f"get_integration_token_from_request: envelope_recipient field has unexpected format: {message.envelope_recipient}"
+                    )
+                    continue
+                if domain == live_settings.INBOUND_EMAIL_DOMAIN:
+                    return token
         else:
             logger.info("get_integration_token_from_request: message.envelope_recipient is not present")
         """
@@ -140,6 +149,21 @@ class InboundEmailWebhookView(AlertChannelDefiningMixin, APIView):
         subject = subject.strip()
         message = email.text or ""
         message = message.strip()
-        sender = email.from_email.addr_spec
+        sender = self.get_sender_from_email_message(email)
 
         return {"subject": subject, "message": message, "sender": sender}
+
+    def get_sender_from_email_message(self, email: AnymailInboundMessage) -> str:
+        try:
+            if isinstance(email.from_email, list):
+                sender = email.from_email[0].addr_spec
+            else:
+                sender = email.from_email.addr_spec
+        except AnymailInvalidAddress as e:
+            # wasn't able to parse email address from message, return raw value from "From" header
+            logger.warning(
+                f"get_sender_from_email_message: issue during parsing sender from email message, getting raw value "
+                f"instead. Exception: {e}"
+            )
+            sender = ", ".join(email.get_all("From"))
+        return sender

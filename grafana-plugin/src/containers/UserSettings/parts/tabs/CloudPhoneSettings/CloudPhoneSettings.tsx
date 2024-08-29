@@ -1,22 +1,23 @@
 import React, { useEffect, useState } from 'react';
 
-import { Button, LoadingPlaceholder, VerticalGroup } from '@grafana/ui';
+import { Button, LoadingPlaceholder, Stack } from '@grafana/ui';
 import { observer } from 'mobx-react';
 
-import PluginLink from 'components/PluginLink/PluginLink';
-import Text from 'components/Text/Text';
+import { PluginLink } from 'components/PluginLink/PluginLink';
+import { Text } from 'components/Text/Text';
 import { WithPermissionControlDisplay } from 'containers/WithPermissionControl/WithPermissionControlDisplay';
-import { User } from 'models/user/user.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { WithStoreProps } from 'state/types';
 import { useStore } from 'state/useStore';
 import { withMobXProviderContext } from 'state/withStore';
-import { UserActions } from 'utils/authorization';
+import { UserActions } from 'utils/authorization/authorization';
+import { StackSize } from 'utils/consts';
 
 interface CloudPhoneSettingsProps extends WithStoreProps {
-  userPk?: User['pk'];
+  userPk?: ApiSchemas['User']['pk'];
 }
 
-const CloudPhoneSettings = observer((props: CloudPhoneSettingsProps) => {
+const _CloudPhoneSettings = observer((props: CloudPhoneSettingsProps) => {
   const { userPk } = props;
   const store = useStore();
   const [syncing, setSyncing] = useState<boolean>(false);
@@ -52,18 +53,18 @@ const CloudPhoneSettings = observer((props: CloudPhoneSettingsProps) => {
     switch (userStatus) {
       case 0:
         return (
-          <VerticalGroup spacing="lg">
+          <Stack direction="column" gap={StackSize.lg}>
             <Text>Cloud notifications enabled, but Grafana Cloud OnCall instance is not connected.</Text>
             <PluginLink query={{ page: 'cloud' }}>
               <Button variant="secondary" icon="external-link-alt">
                 Open Grafana Cloud OnCall page
               </Button>
             </PluginLink>
-          </VerticalGroup>
+          </Stack>
         );
       case 1:
         return (
-          <VerticalGroup spacing="lg">
+          <Stack direction="column" gap={StackSize.lg}>
             <Text>
               We can’t find a matching account in the connected Grafana Cloud OnCall instance (matching by e-mail
               {email && ': ' + email}).
@@ -71,33 +72,33 @@ const CloudPhoneSettings = observer((props: CloudPhoneSettingsProps) => {
             <Button variant="primary" onClick={() => handleLinkClick(userLink)}>
               Sign up in Grafana Cloud OnCall
             </Button>
-          </VerticalGroup>
+          </Stack>
         );
       case 2:
         return (
-          <VerticalGroup spacing="lg">
+          <Stack direction="column" gap={StackSize.lg}>
             <Text>
               Your account successfully matched with the Grafana Cloud OnCall account. Please verify your phone number.{' '}
             </Text>
             <Button variant="secondary" icon="external-link-alt" onClick={() => handleLinkClick(userLink)}>
               Verify phone number in Grafana Cloud OnCall
             </Button>
-          </VerticalGroup>
+          </Stack>
         );
       case 3:
         return (
-          <VerticalGroup spacing="lg">
+          <Stack direction="column" gap={StackSize.lg}>
             <Text>
               Your account successfully matched with the Grafana Cloud OnCall account. Your phone number is verified.{' '}
             </Text>
             <Button variant="secondary" icon="external-link-alt" onClick={() => handleLinkClick(userLink)}>
               Open account in Grafana Cloud OnCall
             </Button>
-          </VerticalGroup>
+          </Stack>
         );
       default:
         return (
-          <VerticalGroup spacing="lg">
+          <Stack direction="column" gap={StackSize.lg}>
             <Text>
               We can’t find a matching account in the connected Grafana Cloud OnCall instance (matching by e-mail
               {email && ': ' + email}).
@@ -105,7 +106,7 @@ const CloudPhoneSettings = observer((props: CloudPhoneSettingsProps) => {
             <Button variant="primary" onClick={() => handleLinkClick(userLink)}>
               Sign up in Grafana Cloud OnCall
             </Button>
-          </VerticalGroup>
+          </Stack>
         );
     }
   };
@@ -115,7 +116,7 @@ const CloudPhoneSettings = observer((props: CloudPhoneSettingsProps) => {
       userAction={UserActions.UserSettingsWrite}
       title="OnCall uses Grafana Cloud OnCall for SMS and phone call notifications"
     >
-      <VerticalGroup spacing="lg">
+      <Stack direction="column" gap={StackSize.lg}>
         <Text.Title level={3}>OnCall uses Grafana Cloud OnCall for SMS and phone call notifications</Text.Title>
         {syncing ? (
           <Button icon="sync" variant="secondary" disabled>
@@ -127,9 +128,9 @@ const CloudPhoneSettings = observer((props: CloudPhoneSettingsProps) => {
           </Button>
         )}
         {!syncing ? <UserCloudStatus /> : <LoadingPlaceholder text="Loading..." />}
-      </VerticalGroup>
+      </Stack>
     </WithPermissionControlDisplay>
   );
 });
 
-export default withMobXProviderContext(CloudPhoneSettings);
+export const CloudPhoneSettings = withMobXProviderContext(_CloudPhoneSettings);

@@ -1,10 +1,23 @@
 ---
 canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/integrations/
 title: Integrations HTTP API
-weight: 500
+weight: 0
+refs:
+  alertmanager:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/configure/integrations/references/alertmanager/
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/configure/integrations/references/alertmanager/
+  pagination:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/oncall-api-reference/#pagination
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/#pagination
 ---
 
-# Create an integration
+# Integrations HTTP API
+
+## Create an integration
 
 ```shell
 curl "{{API_URL}}/api/v1/integrations/" \
@@ -73,14 +86,13 @@ The above command returns JSON structured in the following way:
 ```
 
 Integrations are sources of alerts and alert groups for Grafana OnCall.
-For example, to learn how to integrate Grafana OnCall with Alertmanager see
-[Alertmanager][alertmanager].
+For example, to learn how to integrate Grafana OnCall with Alertmanager refer to [Alertmanager](ref:alertmanager).
 
 **HTTP request**
 
 `POST {{API_URL}}/api/v1/integrations/`
 
-# Get integration
+## Get integration
 
 ```shell
 curl "{{API_URL}}/api/v1/integrations/CFRPV98RPR1U8/" \
@@ -151,7 +163,7 @@ This endpoint retrieves an integration. Integrations are sources of alerts and a
 
 `GET {{API_URL}}/api/v1/integrations/<INTEGRATION_ID>/`
 
-# List integrations
+## List integrations
 
 ```shell
 curl "{{API_URL}}/api/v1/integrations/" \
@@ -226,11 +238,13 @@ The above command returns JSON structured in the following way:
 }
 ```
 
+> **Note**: The response is [paginated](ref:pagination). You may need to make multiple requests to get all records.
+
 **HTTP request**
 
 `GET {{API_URL}}/api/v1/integrations/`
 
-# Update integration
+## Update integration
 
 ```shell
 curl "{{API_URL}}/api/v1/integrations/CFRPV98RPR1U8/" \
@@ -303,7 +317,7 @@ The above command returns JSON structured in the following way:
 
 `PUT {{API_URL}}/api/v1/integrations/<INTEGRATION_ID>/`
 
-# Delete integration
+## Delete integration
 
 Deleted integrations will stop recording new alerts from monitoring. Integration removal won't trigger removal of
 related alert groups or alerts.
@@ -317,8 +331,3 @@ curl "{{API_URL}}/api/v1/integrations/CFRPV98RPR1U8/" \
 **HTTP request**
 
 `DELETE {{API_URL}}/api/v1/integrations/<INTEGRATION_ID>/`
-
-{{% docs/reference %}}
-[alertmanager]: "/docs/oncall/ -> /docs/oncall/<ONCALL VERSION>/integrations/alertmanager"
-[alertmanager]: "/docs/grafana-cloud/ -> /docs/grafana-cloud/alerting-and-irm/oncall/integrations/alertmanager"
-{{% /docs/reference %}}

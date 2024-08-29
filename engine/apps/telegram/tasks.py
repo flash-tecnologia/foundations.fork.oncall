@@ -3,6 +3,7 @@ import logging
 from celery import uuid as celery_uuid
 from celery.utils.log import get_task_logger
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from telegram import error
 
 from apps.alerts.models import Alert, AlertGroup
@@ -65,7 +66,7 @@ def edit_message(self, message_pk):
     try:
         telegram_client.edit_message(message=message)
     except error.BadRequest as e:
-        if "Message is not modified" in e.message:
+        if TelegramClient.error_message_is(e, [TelegramClient.BadRequestMessage.MESSAGE_IS_NOT_MODIFIED]):
             pass
     except (error.RetryAfter, error.TimedOut) as e:
         countdown = getattr(e, "retry_after", 3)
@@ -164,14 +165,19 @@ def send_log_and_actions_message(self, channel_chat_id, group_chat_id, channel_m
                         reply_to_message_id=reply_to_message_id,
                     )
             except error.BadRequest as e:
-                if e.message == "Chat not found":
+                if TelegramClient.error_message_is(
+                    e,
+                    [
+                        TelegramClient.BadRequestMessage.CHAT_NOT_FOUND,
+                        TelegramClient.BadRequestMessage.MESSAGE_TO_BE_REPLIED_NOT_FOUND,
+                    ],
+                ):
                     logger.warning(
                         f"Could not send log and actions messages to Telegram group with id {group_chat_id} "
-                        f"due to 'Chat not found'. alert_group {alert_group.pk}"
+                        f"due to '{e.message}'. alert_group {alert_group.pk}"
                     )
                     return
-                else:
-                    raise
+                raise
 
 
 @shared_dedicated_queue_retry_task(
@@ -184,8 +190,14 @@ def on_create_alert_telegram_representative_async(self, alert_pk):
     """
     It's async in order to prevent Telegram downtime or formatting issues causing delay with SMS and other destinations.
     """
-
-    alert = Alert.objects.get(pk=alert_pk)
+    try:
+        alert = Alert.objects.get(pk=alert_pk)
+    except Alert.DoesNotExist as e:
+        if on_create_alert_telegram_representative_async.request.retries >= 10:
+            logger.error(f"Alert {alert_pk} was not found. Probably it was deleted. Stop retrying")
+            return
+        else:
+            raise e
     alert_group = alert.group
 
     alert_group_messages = alert_group.telegram_messages.filter(
@@ -218,7 +230,10 @@ def on_create_alert_telegram_representative_async(self, alert_pk):
 
 
 @shared_dedicated_queue_retry_task(
-    autoretry_for=(Exception,), retry_backoff=True, max_retries=1 if settings.DEBUG else None
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    dont_autoretry_for=(ObjectDoesNotExist,),
+    max_retries=1 if settings.DEBUG else None,
 )
 def on_alert_group_action_triggered_async(log_record_id):
     from apps.alerts.models import AlertGroupLogRecord
@@ -227,18 +242,14 @@ def on_alert_group_action_triggered_async(log_record_id):
 
     logger.info(f"AlertGroupTelegramRepresentative ACTION SIGNAL, log record {log_record_id}")
     # temporary solution to handle cases when alert group and related log records were deleted
+
     try:
         log_record = AlertGroupLogRecord.objects.get(pk=log_record_id)
     except AlertGroupLogRecord.DoesNotExist as e:
-        retries_count = on_alert_group_action_triggered_async.request.retries
-        if retries_count >= 10:
-            logger.error(
-                f"AlertGroupTelegramRepresentative: was not able to get AlertGroupLogRecord, probably alert group "
-                f"was deleted. log record {log_record_id}, retries: {retries_count}"
-            )
-            return
-        else:
-            raise e
+        logger.warning(
+            f"AlertGroupTelegramRepresentative: log record {log_record_id} never created or has been deleted"
+        )
+        raise e
 
     instance = AlertGroupTelegramRepresentative(log_record)
     if instance.is_applicable():

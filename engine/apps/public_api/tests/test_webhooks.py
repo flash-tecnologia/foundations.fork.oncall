@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from apps.public_api.serializers.webhooks import PRESET_VALIDATION_MESSAGE
 from apps.webhooks.models import Webhook
-from apps.webhooks.tests.test_webhook_presets import TEST_WEBHOOK_PRESET_ID
+from apps.webhooks.tests.test_webhook_presets import ADVANCED_WEBHOOK_PRESET_ID, TEST_WEBHOOK_PRESET_ID
 
 
 def _get_expected_result(webhook):
@@ -26,7 +26,7 @@ def _get_expected_result(webhook):
         "headers": webhook.headers,
         "http_method": webhook.http_method,
         "trigger_type": Webhook.PUBLIC_TRIGGER_TYPES_MAP[webhook.trigger_type],
-        "integration_filter": webhook.integration_filter,
+        "integration_filter": [i.public_primary_key for i in webhook.filtered_integrations.all()] or None,
         "preset": webhook.preset,
     }
 
@@ -37,6 +37,8 @@ def test_get_webhooks(make_organization_and_user_with_token, make_custom_webhook
     client = APIClient()
 
     webhook = make_custom_webhook(organization=organization)
+    # connected integration webhooks are not included
+    make_custom_webhook(organization=organization, is_from_connected_integration=True)
 
     url = reverse("api-public:webhooks-list")
 
@@ -193,7 +195,7 @@ def test_create_webhook_optional_fields(make_organization_and_user_with_token, o
         "headers": optional_value,
         "forward_all": True,
         "is_webhook_enabled": True,
-        "integration_filter": optional_value,
+        "integration_filter": None,
     }
 
     response = client.post(url, data=data, format="json", HTTP_AUTHORIZATION=f"{token}")
@@ -318,6 +320,7 @@ def test_get_webhook_responses(
 
 @pytest.mark.django_db
 def test_webhook_validate_integration_filters(
+    make_organization,
     make_organization_and_user_with_token,
     make_custom_webhook,
     make_alert_receive_channel,
@@ -325,10 +328,14 @@ def test_webhook_validate_integration_filters(
     organization, user, token = make_organization_and_user_with_token()
     alert_receive_channel = make_alert_receive_channel(organization)
     webhook = make_custom_webhook(organization=organization)
-    url = reverse("api-public:webhooks-detail", kwargs={"pk": webhook.public_primary_key})
-    data = {"integration_filter": alert_receive_channel.public_primary_key}
 
+    other_organization = make_organization()
+    other_alert_receive_channel = make_alert_receive_channel(other_organization)
+
+    url = reverse("api-public:webhooks-detail", kwargs={"pk": webhook.public_primary_key})
     client = APIClient()
+
+    data = {"integration_filter": alert_receive_channel.public_primary_key}
     response = client.put(url, data=data, format="json", HTTP_AUTHORIZATION=f"{token}")
     assert response.status_code == 400
 
@@ -336,7 +343,10 @@ def test_webhook_validate_integration_filters(
     response = client.put(url, data=data, format="json", HTTP_AUTHORIZATION=f"{token}")
     assert response.status_code == 400
 
-    data["integration_filter"] = [alert_receive_channel.public_primary_key, alert_receive_channel.public_primary_key]
+    data["integration_filter"] = [
+        alert_receive_channel.public_primary_key,
+        other_alert_receive_channel.public_primary_key,
+    ]
     response = client.put(url, data=data, format="json", HTTP_AUTHORIZATION=f"{token}")
     assert response.status_code == 400
 
@@ -345,21 +355,21 @@ def test_webhook_validate_integration_filters(
     webhook.refresh_from_db()
     assert response.status_code == 200
     assert response.data["integration_filter"] == data["integration_filter"]
-    assert webhook.integration_filter == data["integration_filter"]
+    assert list(webhook.filtered_integrations.all()) == [alert_receive_channel]
 
     data["integration_filter"] = []
     response = client.put(url, data=data, format="json", HTTP_AUTHORIZATION=f"{token}")
     webhook.refresh_from_db()
     assert response.status_code == 200
-    assert response.data["integration_filter"] == data["integration_filter"]
-    assert webhook.integration_filter == data["integration_filter"]
+    assert response.data["integration_filter"] is None
+    assert list(webhook.filtered_integrations.all()) == []
 
     data["integration_filter"] = None
     response = client.put(url, data=data, format="json", HTTP_AUTHORIZATION=f"{token}")
     webhook.refresh_from_db()
     assert response.status_code == 200
-    assert response.data["integration_filter"] == data["integration_filter"]
-    assert webhook.integration_filter == data["integration_filter"]
+    assert response.data["integration_filter"] is None
+    assert list(webhook.filtered_integrations.all()) == []
 
 
 @pytest.mark.django_db
@@ -427,3 +437,23 @@ def test_webhook_block_preset_update(
     response = client.put(url, data=data, format="json", HTTP_AUTHORIZATION=f"{token}")
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json()["non_field_errors"][0] == PRESET_VALIDATION_MESSAGE
+
+
+@pytest.mark.django_db
+def test_webhook_advanced_preset_update(
+    make_organization_and_user_with_token,
+    make_custom_webhook,
+    webhook_preset_api_setup,
+):
+    organization, user, token = make_organization_and_user_with_token()
+    client = APIClient()
+    webhook = make_custom_webhook(organization=organization, preset=ADVANCED_WEBHOOK_PRESET_ID)
+    webhook.refresh_from_db()
+
+    url = reverse("api-public:webhooks-detail", kwargs={"pk": webhook.public_primary_key})
+    data = {
+        "name": "Test rename preset webhook",
+    }
+    response = client.put(url, data=data, format="json", HTTP_AUTHORIZATION=f"{token}")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["name"] == data["name"]

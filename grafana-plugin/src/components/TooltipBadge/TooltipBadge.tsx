@@ -1,11 +1,13 @@
 import React, { FC } from 'react';
 
-import { Icon, Tooltip, IconName, VerticalGroup, HorizontalGroup } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { cx } from '@emotion/css';
+import { Icon, Tooltip, IconName, Stack, useStyles2 } from '@grafana/ui';
+import { bem } from 'styles/utils.styles';
 
-import Text, { TextType } from 'components/Text/Text';
+import { Text, TextType } from 'components/Text/Text';
+import { StackSize } from 'utils/consts';
 
-import styles from './TooltipBadge.module.scss';
+import { getTooltipBadgeStyles } from './TooltipBadge.styles';
 
 interface TooltipBadgeProps {
   className?: string;
@@ -18,13 +20,12 @@ interface TooltipBadgeProps {
   customIcon?: React.ReactNode;
   addPadding?: boolean;
   placement?;
+  testId?: string;
 
   onHover?: () => void;
 }
 
-const cx = cn.bind(styles);
-
-const TooltipBadge: FC<TooltipBadgeProps> = (props) => {
+export const TooltipBadge: FC<TooltipBadgeProps> = (props) => {
   const {
     borderType,
     text,
@@ -36,46 +37,33 @@ const TooltipBadge: FC<TooltipBadgeProps> = (props) => {
     icon,
     customIcon,
     className,
-    ...rest
+    testId,
   } = props;
 
-  const testId = rest['data-testid'];
+  const styles = useStyles2(getTooltipBadgeStyles);
 
   return (
     <Tooltip
       placement={placement || 'bottom-start'}
       interactive
       content={
-        <div className={cx('tooltip')}>
-          <VerticalGroup spacing="xs">
+        <div className={styles.tooltip}>
+          <Stack direction="column" gap={StackSize.xs}>
             <Text type="primary">{tooltipTitle}</Text>
             {tooltipContent && <Text type="secondary">{tooltipContent}</Text>}
-          </VerticalGroup>
+          </Stack>
         </div>
       }
     >
       <div
-        className={cx(
-          'root',
-          'element',
-          { [`element--${borderType}`]: true },
-          { 'element--padding': addPadding },
-          className
-        )}
+        className={cx(styles.element, styles[borderType], { [bem(styles.element, 'padding')]: addPadding }, className)}
         onMouseEnter={onHover}
         {...(testId ? { 'data-testid': testId } : {})}
       >
-        <HorizontalGroup spacing="xs">
+        <Stack gap={StackSize.xs}>
           {renderIcon()}
-          {text !== undefined && (
-            <Text
-              className={cx('element__text', { [`element__text--${borderType}`]: true })}
-              {...(testId ? { 'data-testid': `${testId}-text` } : {})}
-            >
-              {text}
-            </Text>
-          )}
-        </HorizontalGroup>
+          {text !== undefined && <Text {...(testId ? { 'data-testid': `${testId}-text` } : {})}>{text}</Text>}
+        </Stack>
       </div>
     </Tooltip>
   );
@@ -88,8 +76,6 @@ const TooltipBadge: FC<TooltipBadgeProps> = (props) => {
       return null;
     }
 
-    return <Icon className={cx('element__icon', { [`element__icon--${borderType}`]: true })} name={icon as IconName} />;
+    return <Icon name={icon as IconName} />;
   }
 };
-
-export default TooltipBadge;

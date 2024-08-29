@@ -3,6 +3,7 @@ import typing
 from django.db.models import Q
 from django.utils import timezone
 
+from apps.alerts.constants import BUNDLED_NOTIFICATION_DELAY_SECONDS
 from apps.base.messaging import get_messaging_backend_from_id
 from apps.schedules.ical_utils import list_users_to_notify_from_ical
 
@@ -10,7 +11,8 @@ if typing.TYPE_CHECKING:
     from django.db.models.manager import RelatedManager
 
     from apps.alerts.models import AlertGroup, AlertGroupLogRecord, ResolutionNote
-    from apps.base.models import UserNotificationPolicyLogRecord
+    from apps.base.models import UserNotificationPolicy, UserNotificationPolicyLogRecord
+    from apps.user_management.models import User
 
 
 class IncidentLogBuilder:
@@ -554,16 +556,13 @@ class IncidentLogBuilder:
                 # notification_plan_dict structure - {timedelta: [{"user_id": user.pk, "plan_lines": []}]
                 for timedelta, notification_plan in notification_plan_dict.items():
                     escalation_plan_dict.setdefault(timedelta, []).extend(notification_plan)
-        elif escalation_policy_snapshot.step == EscalationPolicy.STEP_TRIGGER_CUSTOM_BUTTON:
+        elif escalation_policy_snapshot.step == EscalationPolicy.STEP_TRIGGER_CUSTOM_WEBHOOK:
             if future_step:
-                custom_button = escalation_policy_snapshot.custom_button_trigger
-                if custom_button is not None:
-                    plan_line = f"trigger outgoing webhook `{custom_button.name}`"
+                custom_webhook = escalation_policy_snapshot.custom_webhook
+                if custom_webhook is not None:
+                    plan_line = f'trigger outgoing webhook "{custom_webhook.name}"'
                 else:
-                    plan_line = (
-                        f'escalation step "{escalation_policy_snapshot.step_display}", '
-                        f"but outgoing webhook is unspecified. Skipping"
-                    )
+                    plan_line = f'escalation step "{escalation_policy_snapshot.step_display}" but outgoing webhook is unspecified. Skipping'
                 plan = {"plan_lines": [plan_line]}
                 escalation_plan_dict.setdefault(timedelta, []).append(plan)
         elif escalation_policy_snapshot.step == EscalationPolicy.STEP_NOTIFY_IF_TIME:
@@ -581,7 +580,9 @@ class IncidentLogBuilder:
                 escalation_plan_dict.setdefault(timedelta, []).append(plan)
         return escalation_plan_dict
 
-    def _render_user_notification_line(self, user_to_notify, notification_policy, for_slack=False):
+    def _render_user_notification_line(
+        self, user_to_notify: "User", notification_policy: "UserNotificationPolicy", for_slack=False
+    ):
         """
         Renders user notification plan line
         :param user_to_notify:
@@ -614,7 +615,9 @@ class IncidentLogBuilder:
             result += f"inviting {user_verbal} but notification channel is unspecified"
         return result
 
-    def _get_notification_plan_for_user(self, user_to_notify, future_step=False, important=False, for_slack=False):
+    def _get_notification_plan_for_user(
+        self, user_to_notify: "User", future_step=False, important=False, for_slack=False
+    ):
         """
         Renders user notification plan
         :param user_to_notify:
@@ -638,6 +641,24 @@ class IncidentLogBuilder:
 
         last_user_log = None
 
+        # get ids of notification policies with bundled notification
+        notification_policies_in_bundle = (
+            self.alert_group.bundled_notifications.all()
+            .values(
+                "notification_policy",
+                "bundle_uuid",
+            )
+            .distinct()
+        )
+        # get lists of notification policies with scheduled but not triggered bundled notifications
+        # and of all notification policies with bundled notifications
+        notification_policy_ids_in_scheduled_bundle: typing.Set[int] = set()
+        notification_policy_ids_in_bundle: typing.Set[int] = set()
+        for notification_policy_in_bundle in notification_policies_in_bundle:
+            if notification_policy_in_bundle["bundle_uuid"] is None:
+                notification_policy_ids_in_scheduled_bundle.add(notification_policy_in_bundle["notification_policy"])
+            notification_policy_ids_in_bundle.add(notification_policy_in_bundle["notification_policy"])
+
         notification_policy_order = 0
         if not future_step:  # escalation step has been passed, so escalation for user has been already triggered.
             last_user_log = (
@@ -649,6 +670,8 @@ class IncidentLogBuilder:
                         UserNotificationPolicyLogRecord.TYPE_PERSONAL_NOTIFICATION_FINISHED,
                     ],
                 )
+                # exclude logs with bundled notification
+                .exclude(notification_policy_id__in=notification_policy_ids_in_bundle)
                 .order_by("created_at")
                 .last()
             )
@@ -668,22 +691,33 @@ class IncidentLogBuilder:
                     # last passed step order + 1
                     notification_policy_order = last_user_log.notification_policy.order + 1
 
-        notification_policies = user_to_notify.get_or_create_notification_policies(important=important)
+        _, notification_policies = user_to_notify.get_notification_policies_or_use_default_fallback(important=important)
 
         for notification_policy in notification_policies:
-            future_notification = notification_policy.order >= notification_policy_order
+            # notification step has been passed but was bundled and delayed - show this step in notification plan
+            is_scheduled_bundled_notification = notification_policy.id in notification_policy_ids_in_scheduled_bundle
+            # notification step has not been passed - show this step in notification plan as well
+            future_notification = (
+                notification_policy.order >= notification_policy_order
+                and notification_policy.id not in notification_policy_ids_in_bundle
+            )
             if notification_policy.step == UserNotificationPolicy.Step.WAIT:
                 wait_delay = notification_policy.wait_delay
                 if wait_delay is not None:
                     timedelta += wait_delay  # increase timedelta for next steps
-            elif future_notification:
+            elif future_notification or is_scheduled_bundled_notification:
+                notification_timedelta = (
+                    timedelta + timezone.timedelta(seconds=BUNDLED_NOTIFICATION_DELAY_SECONDS)
+                    if is_scheduled_bundled_notification
+                    else timedelta
+                )
                 plan_line = self._render_user_notification_line(
                     user_to_notify, notification_policy, for_slack=for_slack
                 )
                 # add plan_line to user plan_lines list
-                if not notification_plan_dict.get(timedelta):
+                if not notification_plan_dict.get(notification_timedelta):
                     plan = {"user_id": user_to_notify.pk, "plan_lines": [plan_line]}
-                    notification_plan_dict.setdefault(timedelta, []).append(plan)
+                    notification_plan_dict.setdefault(notification_timedelta, []).append(plan)
                 else:
-                    notification_plan_dict[timedelta][0]["plan_lines"].append(plan_line)
+                    notification_plan_dict[notification_timedelta][0]["plan_lines"].append(plan_line)
         return notification_plan_dict

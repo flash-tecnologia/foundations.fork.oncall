@@ -101,14 +101,14 @@ $LARGE-MARGIN: 24px;
 }
 
 .routesSection {
-  padding-top: 20px;
-
   &__heading {
     font-size: 16px;
   }
+}
 
-  &__add {
-    margin-bottom: $LARGE-MARGIN;
+:global(.theme-light) {
+  .input {
+    border: var(--border-weak);
   }
 }
 
@@ -116,6 +116,7 @@ $LARGE-MARGIN: 24px;
   flex-grow: 1;
   max-width: calc(100% - 80px);
 }
+
 .input-with-toggler {
   max-width: calc(100% - 134px);
 }
@@ -124,9 +125,6 @@ $LARGE-MARGIN: 24px;
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.tag {
-  height: 25px;
 }
 
 .heartbeat-badge {
@@ -159,9 +157,11 @@ $LARGE-MARGIN: 24px;
     white-space: nowrap;
     text-overflow: ellipsis;
   }
+
   &__item--large {
     max-width: calc((100% - 150px) / 2);
   }
+
   &__item--small {
     max-width: 150px;
   }
@@ -207,27 +207,27 @@ $LARGE-MARGIN: 24px;
   }
 }
 
-.radius {
-  border-radius: 4px;
-}
-
 .inline-switch {
   height: 34px;
+  border: var(--border-weak);
 }
 
 .contactpoints {
   &__table {
     margin-bottom: 24px;
   }
+
   &__connect {
     padding: 12px;
     margin-bottom: 24px;
     border: var(--border-weak);
     border-radius: var(--border-radius);
   }
+
   &__connect-toggler {
     width: 100%;
   }
+
   &__connect-toggler:hover {
     cursor: pointer;
   }
@@ -237,4 +237,19 @@ $LARGE-MARGIN: 24px;
   align-items: center;
   display: inline-flex;
   gap: 4px;
+}
+
+/* -----
+ * Icons
+ */
+
+.icon-exclamation {
+  color: var(--error-text-color);
+}
+
+.route-heading {
+  max-width: 80%;
+  display: block;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }

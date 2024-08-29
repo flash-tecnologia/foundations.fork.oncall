@@ -1,29 +1,29 @@
 import React, { FC, useCallback, useEffect, useMemo } from 'react';
 
-import { Button, HorizontalGroup, Icon, Tooltip, VerticalGroup } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { css, cx } from '@emotion/css';
+import { GrafanaTheme2 } from '@grafana/data';
+import { Button, Icon, Tooltip, useStyles2, Stack } from '@grafana/ui';
 import dayjs from 'dayjs';
 import { observer } from 'mobx-react';
+import { Colors, getLabelCss } from 'styles/utils.styles';
 
-import Avatar from 'components/Avatar/Avatar';
+import NonExistentUserName from 'components/NonExistentUserName/NonExistentUserName';
+import { RenderConditionally } from 'components/RenderConditionally/RenderConditionally';
 import { ScheduleFiltersType } from 'components/ScheduleFilters/ScheduleFilters.types';
-import Text from 'components/Text/Text';
-import WorkingHours from 'components/WorkingHours/WorkingHours';
-import { getShiftName, SHIFT_SWAP_COLOR } from 'models/schedule/schedule.helpers';
-import { Event, ShiftSwap } from 'models/schedule/schedule.types';
+import { Text } from 'components/Text/Text';
+import { WorkingHours } from 'components/WorkingHours/WorkingHours';
+import { getShiftName, scheduleViewToDaysInOneRow, SHIFT_SWAP_COLOR } from 'models/schedule/schedule.helpers';
+import { Event, ScheduleView, ShiftSwap } from 'models/schedule/schedule.types';
 import { getTzOffsetString } from 'models/timezone/timezone.helpers';
-import { Timezone } from 'models/timezone/timezone.types';
-import { User } from 'models/user/user.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { useStore } from 'state/useStore';
+import { StackSize } from 'utils/consts';
+import { truncateTitle } from 'utils/string';
 
-import { getTitle } from './ScheduleSlot.helpers';
-
-import styles from './ScheduleSlot.module.css';
+import { getScheduleSlotStyleParams, getTitle } from './ScheduleSlot.helpers';
 
 interface ScheduleSlotProps {
   event: Event;
-  startMoment: dayjs.Dayjs;
-  currentTimezone: Timezone;
   handleAddOverride: (event: React.MouseEvent<HTMLDivElement>) => void;
   handleAddShiftSwap: (event: React.MouseEvent<HTMLDivElement>) => void;
   handleOpenSchedule: (event: React.MouseEvent<HTMLDivElement>) => void;
@@ -32,14 +32,18 @@ interface ScheduleSlotProps {
   filters?: ScheduleFiltersType;
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   showScheduleNameAsSlotTitle?: boolean;
+  scheduleView?: ScheduleView;
 }
 
-const cx = cn.bind(styles);
+export const ScheduleSlot: FC<ScheduleSlotProps> = observer((props) => {
+  const {
+    timezoneStore: { getDateInSelectedTimezone },
+    scheduleStore: { scheduleView: storeScheduleView },
+  } = useStore();
+  const styles = useStyles2(getStyles);
 
-const ScheduleSlot: FC<ScheduleSlotProps> = observer((props) => {
   const {
     event,
-    currentTimezone,
     color,
     handleAddOverride,
     handleAddShiftSwap,
@@ -48,40 +52,62 @@ const ScheduleSlot: FC<ScheduleSlotProps> = observer((props) => {
     filters,
     onClick,
     showScheduleNameAsSlotTitle,
+    scheduleView: propsScheduleView,
   } = props;
 
-  const start = dayjs(event.start);
-  const end = dayjs(event.end);
+  const scheduleView = propsScheduleView || storeScheduleView;
 
-  const duration = end.diff(start, 'seconds');
+  const start = getDateInSelectedTimezone(event.start);
+  const end = getDateInSelectedTimezone(event.end);
 
-  const base = 60 * 60 * 24 * 7;
+  const durationInSeconds = end.diff(start, 'seconds');
 
-  const width = Math.max(duration / base, 0);
+  const rowInSeconds = scheduleViewToDaysInOneRow[scheduleView] * 24 * 60 * 60;
+
+  const width = Math.max(durationInSeconds / rowInSeconds, 0);
 
   const currentMoment = useMemo(() => dayjs(), []);
 
-  const renderEvent = (event): React.ReactElement | React.ReactElement[] => {
+  const renderEvent = (event: Event): React.ReactElement | React.ReactElement[] => {
     if (event.shiftSwapId) {
-      return <ShiftSwapEvent currentMoment={currentMoment} event={event} currentTimezone={currentTimezone} />;
+      return <ShiftSwapEvent currentMoment={currentMoment} event={event} />;
     }
 
     if (event.is_gap) {
       return (
-        <Tooltip content={<ScheduleGapDetails event={event} currentTimezone={currentTimezone} />}>
-          <div className={cx('root', 'root__type_gap')} />
+        <Tooltip content={<ScheduleGapDetails event={event} />}>
+          <div className={cx(styles.root, styles.gap)} />
         </Tooltip>
       );
     }
 
     if (event.is_empty) {
       return (
-        <div
-          className={cx('root')}
-          style={{
-            backgroundColor: color,
-          }}
-        />
+        <RenderConditionally
+          shouldRender={event.missing_users.length > 0}
+          backupChildren={
+            <div
+              className={styles.root}
+              style={{
+                backgroundColor: color,
+              }}
+            />
+          }
+        >
+          {event.missing_users.map((name) => (
+            <div
+              key={name}
+              className={styles.root}
+              style={{
+                backgroundColor: color,
+              }}
+            >
+              <div className={styles.title}>
+                <NonExistentUserName userName={name} />
+              </div>
+            </div>
+          ))}
+        </RenderConditionally>
       );
     }
 
@@ -94,8 +120,7 @@ const ScheduleSlot: FC<ScheduleSlotProps> = observer((props) => {
         onShiftSwapClick={onShiftSwapClick}
         filters={filters}
         start={start}
-        duration={duration}
-        currentTimezone={currentTimezone}
+        duration={durationInSeconds}
         color={color}
         currentMoment={currentMoment}
         showScheduleNameAsSlotTitle={showScheduleNameAsSlotTitle}
@@ -104,24 +129,22 @@ const ScheduleSlot: FC<ScheduleSlotProps> = observer((props) => {
   };
 
   return (
-    <div className={cx('stack')} style={{ width: `${width * 100}%` }} onClick={onClick}>
+    <div className={styles.stack} style={{ width: `${width * 100}%` }} onClick={onClick}>
       {renderEvent(event)}
     </div>
   );
 });
 
-export default ScheduleSlot;
-
 interface ShiftSwapEventProps {
   event: Event;
-  currentTimezone: Timezone;
   currentMoment: dayjs.Dayjs;
 }
 
 const ShiftSwapEvent = (props: ShiftSwapEventProps) => {
-  const { event, currentTimezone, currentMoment } = props;
+  const { event, currentMoment } = props;
 
   const store = useStore();
+  const styles = useStyles2(getStyles);
 
   const shiftSwap = store.scheduleStore.shiftSwaps[event.shiftSwapId];
 
@@ -130,34 +153,39 @@ const ShiftSwapEvent = (props: ShiftSwapEventProps) => {
 
   useEffect(() => {
     if (shiftSwap?.beneficiary && !store.userStore.items[shiftSwap.beneficiary.pk]) {
-      store.userStore.updateItem(shiftSwap.beneficiary.pk);
+      store.userStore.fetchItemById({ userPk: shiftSwap.beneficiary.pk, skipIfAlreadyPending: true });
     }
   }, [shiftSwap?.beneficiary]);
 
   useEffect(() => {
     if (shiftSwap?.benefactor && !store.userStore.items[shiftSwap.benefactor.pk]) {
-      store.userStore.updateItem(shiftSwap.benefactor.pk);
+      store.userStore.fetchItemById({ userPk: shiftSwap.benefactor.pk, skipIfAlreadyPending: true });
     }
   }, [shiftSwap?.benefactor]);
 
   const beneficiaryStoreUser = store.userStore.items[shiftSwap?.beneficiary?.pk];
   const benefactorStoreUser = store.userStore.items[shiftSwap?.benefactor?.pk];
 
+  const { backgroundColor, border, textColor } = getScheduleSlotStyleParams(
+    SHIFT_SWAP_COLOR,
+    true,
+    Boolean(shiftSwap?.benefactor)
+  );
+
   const scheduleSlotContent = (
-    <div className={cx('root', { 'root__type_shift-swap': true })}>
+    <div
+      className={cx(styles.root)}
+      style={{
+        backgroundColor,
+        border,
+        color: textColor,
+      }}
+      data-testid="schedule-slot"
+    >
       {shiftSwap && (
-        <HorizontalGroup spacing="xs">
-          {beneficiary && <Avatar size="xs" src={beneficiary.avatar_full} />}
-          {benefactor ? (
-            <Avatar size="xs" src={benefactor.avatar_full} />
-          ) : (
-            <div className={cx('no-user')}>
-              <Text size="xs" type="primary">
-                ?
-              </Text>
-            </div>
-          )}
-        </HorizontalGroup>
+        <div className={styles.title}>
+          {truncateTitle(beneficiary.display_name, 9)} → {benefactor ? truncateTitle(benefactor.display_name, 9) : '?'}
+        </div>
       )}
     </div>
   );
@@ -176,7 +204,6 @@ const ShiftSwapEvent = (props: ShiftSwapEventProps) => {
           beneficiaryName={beneficiary?.display_name}
           user={benefactorStoreUser || beneficiaryStoreUser}
           benefactorName={benefactor?.display_name}
-          currentTimezone={currentTimezone}
           event={event}
           color={SHIFT_SWAP_COLOR}
           currentMoment={currentMoment}
@@ -190,7 +217,6 @@ const ShiftSwapEvent = (props: ShiftSwapEventProps) => {
 
 interface RegularEventProps {
   event: Event;
-  currentTimezone: Timezone;
   handleAddOverride: (event: React.MouseEvent<HTMLDivElement>) => void;
   handleAddShiftSwap: (event: React.MouseEvent<HTMLDivElement>) => void;
   handleOpenSchedule: (event: React.MouseEvent<HTMLDivElement>) => void;
@@ -208,8 +234,7 @@ const RegularEvent = (props: RegularEventProps) => {
     event,
     onShiftSwapClick,
     filters,
-    color,
-    currentTimezone,
+    color: propsColor,
     start,
     duration,
     handleAddOverride,
@@ -219,6 +244,7 @@ const RegularEvent = (props: RegularEventProps) => {
     showScheduleNameAsSlotTitle,
   } = props;
   const store = useStore();
+  const styles = useStyles2(getStyles);
 
   const { users } = event;
 
@@ -247,32 +273,40 @@ const RegularEvent = (props: RegularEventProps) => {
 
         const isShiftSwap = Boolean(swap_request);
 
-        const title = isShiftSwap ? 'Shift swap' : showScheduleNameAsSlotTitle ? schedule?.name : getShiftName(shift);
+        const title = isShiftSwap
+          ? `Shift swap to ${getShiftName(shift)}`
+          : showScheduleNameAsSlotTitle
+          ? schedule?.name
+          : getShiftName(shift);
 
-        let backgroundColor = color;
-        if (isShiftSwap) {
-          backgroundColor = SHIFT_SWAP_COLOR;
-        }
+        const { color, backgroundColor, border, textColor } = getScheduleSlotStyleParams(
+          propsColor,
+          Boolean(swap_request),
+          Boolean(swap_request?.user)
+        );
 
         const scheduleSlotContent = (
           <div
-            className={cx('root', { root__inactive: inactive })}
+            className={cx(styles.root, { [styles.inactive]: inactive })}
             style={{
               backgroundColor,
+              border,
+              color: textColor,
             }}
             onClick={swap_request ? getShiftSwapClickHandler(swap_request.pk) : undefined}
+            data-testid="schedule-slot"
           >
             {storeUser && (!swap_request || swap_request.user) && (
               <WorkingHours
-                className={cx('working-hours')}
+                className={styles.workingHours}
                 timezone={storeUser.timezone}
                 workingHours={storeUser.working_hours}
                 startMoment={start}
                 duration={duration}
               />
             )}
-            <div className={cx('title')}>
-              {swap_request && !swap_request.user ? <Icon name="user-arrows" /> : userTitle}
+            <div className={styles.title}>
+              {swap_request && !swap_request.user ? truncateTitle(userTitle, 9) + ' → ?' : userTitle}
             </div>
           </div>
         );
@@ -294,7 +328,6 @@ const RegularEvent = (props: RegularEventProps) => {
                 }
                 benefactorName={isShiftSwap ? (swap_request.user ? display_name : undefined) : undefined}
                 user={storeUser}
-                currentTimezone={currentTimezone}
                 event={event}
                 handleAddOverride={
                   !handleAddOverride || event.is_override || isShiftSwap || currentMoment.isAfter(dayjs(event.end))
@@ -307,7 +340,7 @@ const RegularEvent = (props: RegularEventProps) => {
                     : handleAddShiftSwap
                 }
                 handleOpenSchedule={handleOpenSchedule}
-                color={backgroundColor}
+                color={color}
                 currentMoment={currentMoment}
               />
             }
@@ -321,9 +354,8 @@ const RegularEvent = (props: RegularEventProps) => {
 };
 
 interface ScheduleSlotDetailsProps {
-  user: User;
+  user: ApiSchemas['User'];
   isOncall?: boolean;
-  currentTimezone: Timezone;
   event: Event;
   handleAddOverride?: (event: React.SyntheticEvent) => void;
   handleAddShiftSwap?: (event: React.SyntheticEvent) => void;
@@ -336,10 +368,9 @@ interface ScheduleSlotDetailsProps {
   title: string;
 }
 
-const ScheduleSlotDetails = (props: ScheduleSlotDetailsProps) => {
+const ScheduleSlotDetails = observer((props: ScheduleSlotDetailsProps) => {
   const {
     user,
-    currentTimezone,
     event,
     handleAddOverride,
     handleAddShiftSwap,
@@ -352,7 +383,10 @@ const ScheduleSlotDetails = (props: ScheduleSlotDetailsProps) => {
     title,
   } = props;
 
-  const { scheduleStore } = useStore();
+  const {
+    scheduleStore,
+    timezoneStore: { currentDateInSelectedTimezone, getDateInSelectedTimezone },
+  } = useStore();
 
   const shiftId = event.shift?.pk;
   const shift = scheduleStore.shifts[shiftId];
@@ -360,6 +394,8 @@ const ScheduleSlotDetails = (props: ScheduleSlotDetailsProps) => {
   const schedule = scheduleStore.items[shift?.schedule];
 
   const enableWebOverrides = schedule?.enable_web_overrides;
+
+  const styles = useStyles2(getStyles);
 
   useEffect(() => {
     if (shiftId && !scheduleStore.shifts[shiftId]) {
@@ -377,64 +413,64 @@ const ScheduleSlotDetails = (props: ScheduleSlotDetailsProps) => {
   // const isOncall = Boolean(storeUser && onCallNow && onCallNow.some((onCallUser) => storeUser.pk === onCallUser.pk));
 
   return (
-    <div className={cx('details')}>
-      <VerticalGroup>
-        <HorizontalGroup>
-          <div className={cx('details-icon')}>
-            <div className={cx('badge')} style={{ backgroundColor: color }} />
+    <div className={styles.details}>
+      <Stack direction="column">
+        <Stack>
+          <div className={styles.detailsIcon}>
+            <div className={styles.badge} style={{ backgroundColor: color }} />
           </div>
           <Text type="primary" maxWidth="222px">
             {title}
           </Text>
-        </HorizontalGroup>
-        <HorizontalGroup align="flex-start">
-          <div className={cx('details-icon')}>
-            <Icon className={cx('icon')} name={isShiftSwap ? 'user-arrows' : 'user'} />
+        </Stack>
+        <Stack alignItems="flex-start">
+          <div className={styles.detailsIcon}>
+            <Icon className={styles.icon} name={isShiftSwap ? 'user-arrows' : 'user'} />
           </div>
           {isShiftSwap ? (
-            <VerticalGroup spacing="xs">
+            <Stack direction="column" gap={StackSize.xs}>
               <Text type="primary">Swap pair</Text>
-              <Text type="primary" className={cx('username')}>
+              <Text type="primary" className={styles.username}>
                 {beneficiaryName} <Text type="secondary"> (requested by)</Text>
               </Text>
               {benefactorName ? (
-                <Text type="primary" className={cx('username')}>
+                <Text type="primary" className={styles.username}>
                   {benefactorName} <Text type="secondary"> (accepted by)</Text>
                 </Text>
               ) : (
-                <Text type="secondary" className={cx('username')}>
+                <Text type="secondary" className={styles.username}>
                   Not accepted yet
                 </Text>
               )}
-            </VerticalGroup>
+            </Stack>
           ) : (
-            <Text type="primary" className={cx('username')}>
+            <Text type="primary" className={styles.username}>
               {user?.username}
             </Text>
           )}
-        </HorizontalGroup>
-        <HorizontalGroup align="flex-start">
-          <div className={cx('details-icon')}>
-            <Icon className={cx('icon')} name="clock-nine" />
+        </Stack>
+        <Stack alignItems="flex-start">
+          <div className={styles.detailsIcon}>
+            <Icon className={styles.icon} name="clock-nine" />
           </div>
-          <Text type="primary" className={cx('second-column')}>
-            User local time
+          <Text type="primary" className={styles.secondColumn} data-testid="schedule-slot-user-local-time">
+            User's local time
             <br />
             {currentMoment.tz(user?.timezone).format('DD MMM, HH:mm')}
-            <br />({getTzOffsetString(currentMoment.tz(user?.timezone))})
+            <br />({user?.timezone})
           </Text>
-          <Text type="secondary">
+          <Text type="secondary" data-testid="schedule-slot-current-timezone">
             Current timezone
             <br />
-            {currentMoment.tz(currentTimezone).format('DD MMM, HH:mm')}
-            <br />({getTzOffsetString(currentMoment.tz(currentTimezone))})
+            {currentDateInSelectedTimezone.format('DD MMM, HH:mm')}
+            <br />({getTzOffsetString(currentDateInSelectedTimezone)})
           </Text>
-        </HorizontalGroup>
-        <HorizontalGroup align="flex-start">
-          <div className={cx('details-icon')}>
-            <Icon className={cx('icon')} name="arrows-h" />
+        </Stack>
+        <Stack alignItems="flex-start">
+          <div className={styles.detailsIcon}>
+            <Icon className={styles.icon} name="arrows-h" />
           </div>
-          <Text type="primary" className={cx('second-column')}>
+          <Text type="primary" className={styles.secondColumn}>
             This shift
             <br />
             {dayjs(event.start).tz(user?.timezone).format('DD MMM, HH:mm')}
@@ -443,12 +479,12 @@ const ScheduleSlotDetails = (props: ScheduleSlotDetailsProps) => {
           </Text>
           <Text type="secondary">
             &nbsp; <br />
-            {dayjs(event.start).tz(currentTimezone).format('DD MMM, HH:mm')}
+            {getDateInSelectedTimezone(dayjs(event.start)).format('DD MMM, HH:mm')}
             <br />
-            {dayjs(event.end).tz(currentTimezone).format('DD MMM, HH:mm')}
+            {getDateInSelectedTimezone(dayjs(event.end)).format('DD MMM, HH:mm')}
           </Text>
-        </HorizontalGroup>
-        <HorizontalGroup justify="flex-end">
+        </Stack>
+        <Stack justifyContent="flex-end">
           {handleAddShiftSwap && (
             <Button size="sm" variant="secondary" onClick={handleAddShiftSwap}>
               Request shift swap
@@ -464,31 +500,161 @@ const ScheduleSlotDetails = (props: ScheduleSlotDetailsProps) => {
               Open schedule
             </Button>
           )}
-        </HorizontalGroup>
-      </VerticalGroup>
+        </Stack>
+      </Stack>
     </div>
   );
-};
+});
 
 interface ScheduleGapDetailsProps {
-  currentTimezone: Timezone;
   event: Event;
 }
 
-const ScheduleGapDetails = (props: ScheduleGapDetailsProps) => {
-  const { currentTimezone, event } = props;
+const ScheduleGapDetails = observer((props: ScheduleGapDetailsProps) => {
+  const styles = useStyles2(getStyles);
+  const {
+    timezoneStore: { selectedTimezoneLabel, getDateInSelectedTimezone },
+  } = useStore();
+  const { event } = props;
 
   return (
-    <div className={cx('details')}>
-      <VerticalGroup>
-        <HorizontalGroup spacing="sm">
-          <VerticalGroup spacing="none">
-            <Text type="primary">{currentTimezone}</Text>
-            <Text type="primary">{dayjs(event.start).tz(currentTimezone).format('DD MMM, HH:mm')}</Text>
-            <Text type="primary">{dayjs(event.end).tz(currentTimezone).format('DD MMM, HH:mm')}</Text>
-          </VerticalGroup>
-        </HorizontalGroup>
-      </VerticalGroup>
+    <div className={styles.details}>
+      <Stack direction="column">
+        <Stack gap={StackSize.sm}>
+          <Stack direction="column" gap={StackSize.none}>
+            <Text type="primary">{selectedTimezoneLabel}</Text>
+            <Text type="primary">{getDateInSelectedTimezone(dayjs(event.start)).format('DD MMM, HH:mm')}</Text>
+            <Text type="primary">{getDateInSelectedTimezone(dayjs(event.end)).format('DD MMM, HH:mm')}</Text>
+          </Stack>
+        </Stack>
+      </Stack>
     </div>
   );
+});
+
+const getStyles = (theme: GrafanaTheme2) => {
+  return {
+    root: css`
+      height: 28px;
+      background: ${Colors.GRAY_8};
+      border-radius: 2px;
+      position: relative;
+      display: flex;
+      overflow: hidden;
+      margin-right: 1px;
+      padding: 4px;
+      align-items: center;
+      transition: opacity 0.2s ease;
+      cursor: pointer;
+    `,
+
+    workingHours: css`
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    `,
+
+    stack: css`
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      flex-shrink: 0;
+    `,
+
+    // TODO: What would be a matching value from theme for background?
+    gap: css`
+      background: rgba(209, 14, 92, 0.2);
+      border: 1px dashed ${theme.colors.error.text};
+      color: rgba(209, 14, 92, 0.5);
+      visibility: hidden;
+    `,
+
+    noUser: css`
+      width: 12px;
+      height: 12px;
+      background: ${getLabelCss('blue', theme)};
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+    `,
+
+    inactive: css`
+      opacity: 0.3;
+    `,
+
+    title: css`
+      z-index: 1;
+      font-size: 12px;
+      width: 100%;
+      font-weight: 500;
+      white-space: nowrap;
+    `,
+
+    label: css`
+      background: rgba(255, 255, 255, 0.7);
+      border-radius: 2px;
+      display: inline-block;
+      padding: 2px 4px;
+      line-height: 16px;
+      z-index: 1;
+      font-size: 10px;
+      font-weight: bold;
+      margin-right: 5px;
+      flex-shrink: 0;
+    `,
+
+    details: css`
+      width: 300px;
+      padding: 5px 0;
+    `,
+
+    detailsUserStatus: css`
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+
+      &--success {
+        background-color: ${theme.colors.success.text};
+      }
+    `,
+
+    time: css`
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background-color: white;
+      z-index: 2;
+    `,
+
+    isOnCallIcon: css`
+      color: ${theme.isDark ? '#181b1f' : '#fff'};
+      vertical-align: middle;
+    `,
+
+    detailsIcon: css`
+      width: 16px;
+      margin-right: 4px;
+    `,
+
+    badge: css`
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin: 0 auto;
+    `,
+
+    username: css`
+      word-break: break-word;
+    `,
+
+    secondColumn: css`
+      width: 120px;
+    `,
+
+    icon: css`
+      color: ${theme.colors.secondary.text};
+    `,
+  };
 };

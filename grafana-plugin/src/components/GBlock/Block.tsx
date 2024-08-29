@@ -1,8 +1,10 @@
 import React, { FC, HTMLAttributes } from 'react';
 
-import cn from 'classnames/bind';
+import { cx } from '@emotion/css';
+import { useStyles2 } from '@grafana/ui';
+import { bem } from 'styles/utils.styles';
 
-import styles from './Block.module.scss';
+import { getBlockStyles } from './Block.styles';
 
 interface BlockProps extends HTMLAttributes<HTMLElement> {
   bordered?: boolean;
@@ -12,9 +14,7 @@ interface BlockProps extends HTMLAttributes<HTMLElement> {
   fullWidth?: boolean;
 }
 
-const cx = cn.bind(styles);
-
-const Block: FC<BlockProps> = (props) => {
+export const Block: FC<BlockProps> = (props) => {
   const {
     children,
     style,
@@ -27,16 +27,18 @@ const Block: FC<BlockProps> = (props) => {
     ...rest
   } = props;
 
+  const styles = useStyles2(getBlockStyles);
+
   return (
     <div
       className={cx(
-        'root',
+        styles.root,
         {
-          root_bordered: bordered,
-          root_shadowed: shadowed,
-          'root--fullWidth': fullWidth,
-          'root--withBackGround': withBackground,
-          'root--hover': hover,
+          [bem(styles.root, 'bordered')]: bordered,
+          [bem(styles.root, 'shadowed')]: shadowed,
+          [bem(styles.root, 'fullWidth')]: fullWidth,
+          [bem(styles.root, 'withBackGround')]: withBackground,
+          [bem(styles.root, 'hover')]: hover,
         },
         className
       )}
@@ -47,5 +49,3 @@ const Block: FC<BlockProps> = (props) => {
     </div>
   );
 };
-
-export default Block;

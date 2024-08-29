@@ -1,10 +1,18 @@
 ---
 canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/users/
-title: Grafana OnCall Users HTTP API
-weight: 1500
+title: Grafana OnCall users HTTP API
+weight: 0
+refs:
+  pagination:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/oncall-api-reference/#pagination
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/#pagination
 ---
 
-# Get a user
+# Grafana OnCall users HTTP API
+
+## Get a user
 
 This endpoint retrieves the user object.
 
@@ -29,7 +37,8 @@ The above command returns JSON structured in the following way:
   ],
   "username": "alex",
   "role": "admin",
-  "timezone": "UTC"
+  "timezone": "UTC",
+  "teams": []
 }
 ```
 
@@ -47,8 +56,9 @@ Use `{{API_URL}}/api/v1/users/current` to retrieve the current user.
 | `username` | Yes/org | User username                                                      |
 | `role`     |   No    | One of: `user`, `observer`, `admin`.                               |
 | `timezone` |   No    | timezone of the user one of [time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).                               |
+| `teams`    |   No    | List of team IDs the user belongs to                               |
 
-# List Users
+## List Users
 
 ```shell
 curl "{{API_URL}}/api/v1/users/" \
@@ -76,7 +86,8 @@ The above command returns JSON structured in the following way:
       ],
       "username": "alex",
       "role": "admin",
-      "timezone": "UTC"
+      "timezone": "UTC",
+      "teams": ["TAAM1K1NNEHAG"]
     }
   ],
   "current_page_number": 1,
@@ -85,7 +96,7 @@ The above command returns JSON structured in the following way:
 }
 ```
 
-This endpoint retrieves all users.
+> **Note**: The response is [paginated](ref:pagination). You may need to make multiple requests to get all records.
 
 The following available filter parameter should be provided as a `GET` argument:
 

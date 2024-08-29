@@ -6,11 +6,14 @@ import { goToOnCallPage } from './navigation';
 export enum EscalationStep {
   NotifyUsers = 'Notify users',
   NotifyUsersFromOnCallSchedule = 'Notify users from on-call schedule',
+  ContinueEscalationIfCurrentUTCTimeIsIn = 'Continue escalation if current UTC time is in range',
+  TriggerWebhook = 'Trigger webhook',
 }
 
-const escalationStepValuePlaceholder: Record<EscalationStep, string> = {
+const escalationStepValuePlaceholder: Partial<Record<EscalationStep, string>> = {
   [EscalationStep.NotifyUsers]: 'Select User',
   [EscalationStep.NotifyUsersFromOnCallSchedule]: 'Select Schedule',
+  [EscalationStep.TriggerWebhook]: 'Select Webhook',
 };
 
 export const createEscalationChain = async (

@@ -1,15 +1,21 @@
 import { LoaderStore } from 'models/loader/loader';
-import { openErrorNotification, openNotification, openWarningNotification } from 'utils';
+import { openErrorNotification, openNotification, openWarningNotification } from 'utils/utils';
 
 export function AutoLoadingState(actionKey: string) {
   return function (_target: object, _key: string, descriptor: PropertyDescriptor) {
+    let nbOfPendingActions = 0;
     const originalFunction = descriptor.value;
     descriptor.value = async function (...args: any) {
       LoaderStore.setLoadingAction(actionKey, true);
+      nbOfPendingActions++;
       try {
-        await originalFunction.apply(this, args);
+        return await originalFunction.apply(this, args);
       } finally {
-        LoaderStore.setLoadingAction(actionKey, false);
+        nbOfPendingActions--;
+        // if there are other pending actions with the same key, wait till the last one is done
+        if (nbOfPendingActions === 0) {
+          LoaderStore.setLoadingAction(actionKey, false);
+        }
       }
     };
   };
@@ -30,9 +36,26 @@ export function WrapAutoLoadingState(callback: Function, actionKey: string): (..
 type GlobalNotificationConfig = {
   success?: string;
   failure?: string;
-  composeFailureMessageFn?: (error: unknown) => string;
+  composeFailureMessageFn?: (error: Response) => Promise<string>;
   failureType?: 'error' | 'warning';
 };
+
+export function WrapWithGlobalNotification(
+  callback: Function,
+  { success, failure, composeFailureMessageFn, failureType = 'error' }: GlobalNotificationConfig
+) {
+  return async (...params) => {
+    try {
+      await callback(...params);
+      success && openNotification(success);
+    } catch (err) {
+      const open = failureType === 'error' ? openErrorNotification : openWarningNotification;
+      const message = composeFailureMessageFn ? await composeFailureMessageFn(err) : failure;
+      open(message);
+      throw err;
+    }
+  };
+}
 
 export function WithGlobalNotification({
   success,
@@ -46,11 +69,11 @@ export function WithGlobalNotification({
     descriptor.value = async function (...args: any) {
       try {
         const response = await childFunction.apply(this, args);
-        openNotification(success);
+        success && openNotification(success);
         return response;
       } catch (err) {
         const open = failureType === 'error' ? openErrorNotification : openWarningNotification;
-        const message = composeFailureMessageFn ? composeFailureMessageFn(err) : failure;
+        const message = composeFailureMessageFn ? await composeFailureMessageFn(err) : failure;
         open(message);
         throw err;
       }

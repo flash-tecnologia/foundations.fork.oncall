@@ -2,7 +2,9 @@ import { OrgRole } from '@grafana/data';
 import { config } from '@grafana/runtime';
 import { contextSrv } from 'grafana/app/core/core';
 
-import * as auth from './';
+import { getPluginId } from 'utils/consts';
+
+import * as auth from './authorization';
 
 jest.mock('grafana/app/core/core', () => ({
   contextSrv: {
@@ -92,7 +94,7 @@ describe('generateMissingPermissionMessage', () => {
 describe('generatePermissionString', () => {
   test('it properly builds permission strings with prefixes', () => {
     expect(auth.generatePermissionString(auth.Resource.API_KEYS, auth.Action.READ, true)).toEqual(
-      'grafana-oncall-app.api-keys:read'
+      `${getPluginId()}.api-keys:read`
     );
   });
 

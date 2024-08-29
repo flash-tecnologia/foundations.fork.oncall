@@ -1,41 +1,43 @@
 import React from 'react';
 
-import { Tab, TabsBar } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { css } from '@emotion/css';
+import { AppRootProps } from '@grafana/data';
+import { Tab, TabsBar, useStyles2 } from '@grafana/ui';
 import { observer } from 'mobx-react';
 
-import ChatOpsPage from 'pages/settings/tabs/ChatOps/ChatOps';
-import MainSettings from 'pages/settings/tabs/MainSettings/MainSettings';
+import { ChatOpsPage } from 'pages/settings/tabs/ChatOps/ChatOps';
+import { MainSettings } from 'pages/settings/tabs/MainSettings/MainSettings';
 import { isTopNavbar } from 'plugin/GrafanaPluginRootPage.helpers';
 import { AppFeature } from 'state/features';
-import { RootBaseStore } from 'state/rootBaseStore';
+import { WithStoreProps } from 'state/types';
 import { withMobXProviderContext } from 'state/withStore';
-import { isUserActionAllowed, UserActions } from 'utils/authorization';
+import { LocationHelper } from 'utils/LocationHelper';
+import { isUserActionAllowed, UserActions } from 'utils/authorization/authorization';
 
 import { SettingsPageTab } from './SettingsPage.types';
-import CloudPage from './tabs/Cloud/CloudPage';
+import { CloudPage } from './tabs/Cloud/CloudPage';
 import LiveSettingsPage from './tabs/LiveSettings/LiveSettingsPage';
-import TeamsSettings from './tabs/TeamsSettings/TeamsSettings';
+import { TeamsSettings } from './tabs/TeamsSettings/TeamsSettings';
 
-import styles from './SettingsPage.module.css';
-
-const cx = cn.bind(styles);
-
-interface SettingsPageProps {
-  store: RootBaseStore;
-}
+interface SettingsPageProps extends AppRootProps, WithStoreProps {}
 interface SettingsPageState {
   activeTab: string;
 }
 
 @observer
-class SettingsPage extends React.Component<SettingsPageProps, SettingsPageState> {
-  state: SettingsPageState = {
-    activeTab: SettingsPageTab.MainSettings.key, // should read from route instead
-  };
+class Settings extends React.Component<SettingsPageProps, SettingsPageState> {
+  constructor(props: SettingsPageProps) {
+    super(props);
+
+    const tab = LocationHelper.getQueryParam('tab');
+
+    this.state = {
+      activeTab: tab || SettingsPageTab.MainSettings.key,
+    };
+  }
 
   render() {
-    return <div className={cx('root')}>{this.renderContent()}</div>;
+    return <div>{this.renderContent()}</div>;
   }
 
   renderContent() {
@@ -44,6 +46,7 @@ class SettingsPage extends React.Component<SettingsPageProps, SettingsPageState>
 
     const onTabChange = (tab: string) => {
       this.setState({ activeTab: tab });
+      LocationHelper.update({ tab }, 'partial');
     };
 
     const hasLiveSettings = store.hasFeature(AppFeature.LiveSettings);
@@ -127,31 +130,32 @@ interface TabsContentProps {
 
 const TabsContent = (props: TabsContentProps) => {
   const { activeTab } = props;
+  const styles = useStyles2(getStyles);
 
   return (
-    <div className={cx('tabs__content')}>
+    <div className={styles.tabsContent}>
       {activeTab === SettingsPageTab.MainSettings.key && (
-        <div className={cx('tab__page')}>
+        <div>
           <MainSettings />
         </div>
       )}
       {activeTab === SettingsPageTab.TeamsSettings.key && (
-        <div className={cx('tab__page')}>
+        <div>
           <TeamsSettings />
         </div>
       )}
       {activeTab === SettingsPageTab.ChatOps.key && (
-        <div className={cx('tab__page')}>
+        <div>
           <ChatOpsPage />
         </div>
       )}
       {activeTab === SettingsPageTab.EnvVariables.key && (
-        <div className={cx('tab__page')}>
+        <div>
           <LiveSettingsPage />
         </div>
       )}
       {activeTab === SettingsPageTab.Cloud.key && (
-        <div className={cx('tab__page')}>
+        <div>
           <CloudPage />
         </div>
       )}
@@ -159,4 +163,12 @@ const TabsContent = (props: TabsContentProps) => {
   );
 };
 
-export default withMobXProviderContext(SettingsPage);
+const getStyles = () => {
+  return {
+    tabsContent: css`
+      padding-top: 24px;
+    `,
+  };
+};
+
+export const SettingsPage = withMobXProviderContext(Settings);

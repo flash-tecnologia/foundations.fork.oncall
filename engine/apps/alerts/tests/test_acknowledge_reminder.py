@@ -1,3 +1,4 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
@@ -10,7 +11,6 @@ from apps.alerts.tasks import acknowledge_reminder_task
 from apps.alerts.tasks.acknowledge_reminder import unacknowledge_timeout_task
 from apps.user_management.models import Organization
 
-ROOT_ALERT_GROUP_ID = 42
 TASK_ID = "TASK_ID"
 
 
@@ -36,7 +36,7 @@ def ack_reminder_test_setup(
         acknowledged=True,
         acknowledged_by=AlertGroup.USER,
         resolved=False,
-        root_alert_group_id=None,
+        set_root_alert_group=False,
         acknowledge_remind_timeout=Organization.ACKNOWLEDGE_REMIND_1H,
         unacknowledge_timeout=Organization.UNACKNOWLEDGE_TIMEOUT_5MIN,
         acknowledged_by_confirmed=None,
@@ -46,14 +46,14 @@ def ack_reminder_test_setup(
         )
         user = make_user(organization=organization)
         alert_receive_channel = make_alert_receive_channel(organization)
-        make_alert_group(alert_receive_channel=alert_receive_channel, pk=ROOT_ALERT_GROUP_ID)
+        root_alert_group = make_alert_group(alert_receive_channel=alert_receive_channel)
         alert_group = make_alert_group(
             alert_receive_channel,
             acknowledged=acknowledged,
             acknowledged_by=acknowledged_by,
             acknowledged_by_user=user,
             resolved=resolved,
-            root_alert_group_id=root_alert_group_id,
+            root_alert_group_id=root_alert_group.id if set_root_alert_group else None,
         )
 
         alert_group.last_unique_unacknowledge_process_id = task_id
@@ -70,7 +70,7 @@ def test_acknowledge_by_user_invokes_start_ack_reminder(ack_reminder_test_setup)
     organization, alert_group, user = ack_reminder_test_setup(acknowledged=False)
 
     with patch.object(alert_group, "start_ack_reminder_if_needed") as mock_start_ack_reminder:
-        alert_group.acknowledge_by_user(user, ActionSource.SLACK)
+        alert_group.acknowledge_by_user_or_backsync(user, ActionSource.SLACK)
         mock_start_ack_reminder.assert_called_once_with()
 
 
@@ -100,16 +100,16 @@ def test_start_ack_reminder_invokes_acknowledge_reminder_task(ack_reminder_test_
 
 
 @pytest.mark.parametrize(
-    "root_alert_group_id,acknowledge_remind_timeout",
+    "set_root_alert_group,acknowledge_remind_timeout",
     _parametrize_or(
-        best=(None, Organization.ACKNOWLEDGE_REMIND_1H),
-        worst=(ROOT_ALERT_GROUP_ID, Organization.ACKNOWLEDGE_REMIND_NEVER),
+        best=(False, Organization.ACKNOWLEDGE_REMIND_1H),
+        worst=(True, Organization.ACKNOWLEDGE_REMIND_NEVER),
     ),
 )
 @pytest.mark.django_db
-def test_ack_reminder_skip(ack_reminder_test_setup, root_alert_group_id, acknowledge_remind_timeout):
+def test_ack_reminder_skip(ack_reminder_test_setup, set_root_alert_group, acknowledge_remind_timeout):
     organization, alert_group, user = ack_reminder_test_setup(
-        acknowledge_remind_timeout=acknowledge_remind_timeout, root_alert_group_id=root_alert_group_id
+        acknowledge_remind_timeout=acknowledge_remind_timeout, set_root_alert_group=set_root_alert_group
     )
 
     with patch.object(acknowledge_reminder_task, "apply_async") as mock_acknowledge_reminder_task:
@@ -118,10 +118,10 @@ def test_ack_reminder_skip(ack_reminder_test_setup, root_alert_group_id, acknowl
 
 
 @pytest.mark.parametrize(
-    "task_id,acknowledged,acknowledged_by,resolved,root_alert_group_id,acknowledge_remind_timeout",
+    "task_id,acknowledged,acknowledged_by,resolved,set_root_alert_group,acknowledge_remind_timeout",
     _parametrize_or(
-        best=(TASK_ID, True, AlertGroup.USER, False, None, Organization.ACKNOWLEDGE_REMIND_1H),
-        worst=(None, False, AlertGroup.SOURCE, True, ROOT_ALERT_GROUP_ID, Organization.ACKNOWLEDGE_REMIND_NEVER),
+        best=(TASK_ID, True, AlertGroup.USER, False, False, Organization.ACKNOWLEDGE_REMIND_1H),
+        worst=(None, False, AlertGroup.SOURCE, True, True, Organization.ACKNOWLEDGE_REMIND_NEVER),
     ),
 )
 @patch.object(unacknowledge_timeout_task, "apply_async")
@@ -135,7 +135,7 @@ def test_acknowledge_reminder_task_skip(
     acknowledged,
     acknowledged_by,
     resolved,
-    root_alert_group_id,
+    set_root_alert_group,
     acknowledge_remind_timeout,
 ):
     organization, alert_group, user = ack_reminder_test_setup(
@@ -143,7 +143,7 @@ def test_acknowledge_reminder_task_skip(
         acknowledged=acknowledged,
         acknowledged_by=acknowledged_by,
         resolved=resolved,
-        root_alert_group_id=root_alert_group_id,
+        set_root_alert_group=set_root_alert_group,
         acknowledge_remind_timeout=acknowledge_remind_timeout,
     )
     acknowledge_reminder_task(alert_group.pk, TASK_ID)
@@ -158,12 +158,19 @@ def test_acknowledge_reminder_task_skip(
 @patch.object(acknowledge_reminder_task, "apply_async")
 @pytest.mark.django_db
 def test_acknowledge_reminder_task_reschedules_itself(
-    mock_acknowledge_reminder_task, mock_unacknowledge_timeout_task, ack_reminder_test_setup
+    mock_acknowledge_reminder_task,
+    mock_unacknowledge_timeout_task,
+    ack_reminder_test_setup,
+    django_capture_on_commit_callbacks,
 ):
     organization, alert_group, user = ack_reminder_test_setup(
         unacknowledge_timeout=Organization.UNACKNOWLEDGE_TIMEOUT_NEVER
     )
-    acknowledge_reminder_task(alert_group.pk, TASK_ID)
+    with django_capture_on_commit_callbacks(execute=True) as callbacks:
+        acknowledge_reminder_task(alert_group.pk, TASK_ID)
+
+    # send_alert_group_signal task is queued after commit
+    assert len(callbacks) == 1
 
     mock_unacknowledge_timeout_task.assert_not_called()
     mock_acknowledge_reminder_task.assert_called_once_with(
@@ -202,14 +209,14 @@ def test_acknowledge_reminder_task_invokes_unacknowledge_timeout_task(
 
 
 @pytest.mark.parametrize(
-    "task_id,acknowledged,acknowledged_by,resolved,root_alert_group_id,acknowledge_remind_timeout,unacknowledge_timeout",
+    "task_id,acknowledged,acknowledged_by,resolved,set_root_alert_group,acknowledge_remind_timeout,unacknowledge_timeout",
     _parametrize_or(
         best=(
             TASK_ID,
             True,
             AlertGroup.USER,
             False,
-            None,
+            False,
             Organization.ACKNOWLEDGE_REMIND_1H,
             Organization.UNACKNOWLEDGE_TIMEOUT_5MIN,
         ),
@@ -218,7 +225,7 @@ def test_acknowledge_reminder_task_invokes_unacknowledge_timeout_task(
             False,
             AlertGroup.SOURCE,
             True,
-            ROOT_ALERT_GROUP_ID,
+            True,
             Organization.ACKNOWLEDGE_REMIND_NEVER,
             Organization.UNACKNOWLEDGE_TIMEOUT_NEVER,
         ),
@@ -235,7 +242,7 @@ def test_unacknowledge_timeout_task_skip(
     acknowledged,
     acknowledged_by,
     resolved,
-    root_alert_group_id,
+    set_root_alert_group,
     acknowledge_remind_timeout,
     unacknowledge_timeout,
 ):
@@ -244,7 +251,7 @@ def test_unacknowledge_timeout_task_skip(
         acknowledged=acknowledged,
         acknowledged_by=acknowledged_by,
         resolved=resolved,
-        root_alert_group_id=root_alert_group_id,
+        set_root_alert_group=set_root_alert_group,
         acknowledge_remind_timeout=acknowledge_remind_timeout,
         unacknowledge_timeout=unacknowledge_timeout,
     )
@@ -334,6 +341,29 @@ def test_unacknowledge_timeout_task_skip_deleted_org(
     organization.save()
 
     unacknowledge_timeout_task(alert_group.pk, TASK_ID)
+
+    mock_unacknowledge_timeout_task.assert_not_called()
+    mock_acknowledge_reminder_task.assert_not_called()
+
+    assert not alert_group.log_records.exists()
+
+
+@patch.object(acknowledge_reminder_task, "apply_async")
+@patch.object(unacknowledge_timeout_task, "apply_async")
+@pytest.mark.django_db
+def test_ack_reminder_cancel_too_old(
+    mock_acknowledge_reminder_task,
+    mock_unacknowledge_timeout_task,
+    ack_reminder_test_setup,
+    settings,
+):
+    organization, alert_group, user = ack_reminder_test_setup(
+        unacknowledge_timeout=Organization.UNACKNOWLEDGE_TIMEOUT_NEVER
+    )
+    alert_group.started_at = timezone.now() - timedelta(days=settings.ACKNOWLEDGE_REMINDER_TASK_EXPIRY_DAYS + 1)
+    alert_group.save()
+
+    acknowledge_reminder_task(alert_group.pk, TASK_ID)
 
     mock_unacknowledge_timeout_task.assert_not_called()
     mock_acknowledge_reminder_task.assert_not_called()

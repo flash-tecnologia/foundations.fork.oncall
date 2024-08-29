@@ -1,4 +1,4 @@
-import React, { FC } from 'react';
+import React, { FC, ReactElement } from 'react';
 
 import { NavModelItem } from '@grafana/data';
 import { PluginPage } from 'PluginPage';
@@ -6,7 +6,7 @@ import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 import { AppRootProps } from 'types';
 
-import Alerts from 'containers/Alerts/Alerts';
+import { Alerts } from 'containers/Alerts/Alerts';
 import { isTopNavbar } from 'plugin/GrafanaPluginRootPage.helpers';
 
 import styles from './DefaultPageLayout.module.scss';
@@ -19,7 +19,7 @@ interface DefaultPageLayoutProps extends AppRootProps {
   pageNav: NavModelItem;
 }
 
-const DefaultPageLayout: FC<DefaultPageLayoutProps> = observer((props) => {
+export const DefaultPageLayout: FC<DefaultPageLayoutProps> = observer((props) => {
   const { children, page, pageNav } = props;
 
   if (isTopNavbar()) {
@@ -28,15 +28,15 @@ const DefaultPageLayout: FC<DefaultPageLayoutProps> = observer((props) => {
 
   return renderLegacyNavbar();
 
-  function renderTopNavbar(): JSX.Element {
+  function renderTopNavbar(): ReactElement {
     return (
-      <PluginPage page={page} pageNav={pageNav}>
+      <PluginPage page={page} pageNav={pageNav as any}>
         <div className={cx('root')}>{children}</div>
       </PluginPage>
     );
   }
 
-  function renderLegacyNavbar(): JSX.Element {
+  function renderLegacyNavbar(): ReactElement {
     return (
       <PluginPage page={page}>
         <div className="page-container u-height-100">
@@ -49,5 +49,3 @@ const DefaultPageLayout: FC<DefaultPageLayoutProps> = observer((props) => {
     );
   }
 });
-
-export default DefaultPageLayout;

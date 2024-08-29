@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-labels: &oncall-labels
   - "com.grafana.oncall.env=dev"
 
@@ -9,6 +7,9 @@ x-oncall-build: &oncall-build-args
   context: ./engine
   target: ${ONCALL_IMAGE_TARGET:-dev}
   labels: *oncall-labels
+  cache_from:
+    - grafana/oncall:latest
+    - grafana/oncall:dev
 
 x-oncall-volumes: &oncall-volumes
   - ./engine:/etc/app
@@ -51,14 +52,9 @@ services:
       context: ./grafana-plugin
       dockerfile: Dockerfile.dev
       labels: *oncall-labels
-    environment:
-      ONCALL_API_URL: http://host.docker.internal:8080
     volumes:
       - ./grafana-plugin:/etc/app
       - node_modules_dev:/etc/app/node_modules
-      # https://stackoverflow.com/a/60456034
-      # see the explaination above that uses the $ENTERPRISE_ENGINE env var
-      - ${ENTERPRISE_FRONTEND:-/dev/null}:${ENTERPRISE_FRONTEND_VOLUME_MOUNT_DEST_DIR:-/tmp/empty:ro}
     profiles:
       - oncall_ui
 
@@ -326,6 +322,8 @@ services:
       GF_SECURITY_ADMIN_USER: oncall
       GF_SECURITY_ADMIN_PASSWORD: oncall
       GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: grafana-oncall-app
+      GF_FEATURE_TOGGLES_ENABLE: externalServiceAccounts
+      ONCALL_API_URL: http://host.docker.internal:8080
     env_file:
       - ./dev/.env.${DB}.dev
     ports:

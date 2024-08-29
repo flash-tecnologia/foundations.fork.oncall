@@ -69,7 +69,8 @@ class ScheduleBaseSerializer(EagerLoadingMixin, serializers.ModelSerializer):
     def get_on_call_now(self, obj):
         # Serializer context is set here: apps.api.views.schedule.ScheduleView.get_serializer_context
         users = self.context["oncall_users"].get(obj, [])
-        return [user.short() for user in users]
+        organization = self.context["request"].auth.organization
+        return [user.short(organization) for user in users]
 
     def get_number_of_escalation_chains(self, obj):
         # num_escalation_chains param added in queryset via annotate. Check ScheduleView.get_queryset
@@ -88,9 +89,8 @@ class ScheduleBaseSerializer(EagerLoadingMixin, serializers.ModelSerializer):
 
     def create(self, validated_data):
         created_schedule = super().create(validated_data)
-        created_schedule.check_empty_shifts_for_next_week()
+        created_schedule.check_gaps_and_empty_shifts_for_next_week()
         schedule_notify_about_empty_shifts_in_schedule.apply_async((created_schedule.pk,))
-        created_schedule.check_gaps_for_next_week()
         schedule_notify_about_gaps_in_schedule.apply_async((created_schedule.pk,))
         return created_schedule
 

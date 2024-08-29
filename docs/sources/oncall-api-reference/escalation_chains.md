@@ -1,10 +1,18 @@
 ---
 canonical: https://grafana.com/docs/oncall/latest/oncall-api-reference/escalation_chains/
-title: Escalation Chains HTTP API
-weight: 200
+title: Escalation chains HTTP API
+weight: 0
+refs:
+  pagination:
+    - pattern: /docs/oncall/
+      destination: /docs/oncall/<ONCALL_VERSION>/oncall-api-reference/#pagination
+    - pattern: /docs/grafana-cloud/
+      destination: /docs/grafana-cloud/alerting-and-irm/oncall/oncall-api-reference/#pagination
 ---
 
-# Create an escalation chain
+# Escalation chains HTTP API
+
+## Create an escalation chain
 
 ```shell
 curl "{{API_URL}}/api/v1/escalation_chains/" \
@@ -35,7 +43,7 @@ The above command returns JSON structured in the following way:
 
 `POST {{API_URL}}/api/v1/escalation_chains/`
 
-# Get an escalation chain
+## Get an escalation chain
 
 ```shell
 curl "{{API_URL}}/api/v1/escalation_chains/F5JU6KJET33FE/" \
@@ -58,7 +66,7 @@ The above command returns JSON structured in the following way:
 
 `GET {{API_URL}}/api/v1/escalation_chains/<ESCALATION_CHAIN_ID>/`
 
-# List escalation chains
+## List escalation chains
 
 ```shell
 curl "{{API_URL}}/api/v1/escalation_chains/" \
@@ -87,11 +95,13 @@ The above command returns JSON structured in the following way:
 }
 ```
 
+> **Note**: The response is [paginated](ref:pagination). You may need to make multiple requests to get all records.
+
 **HTTP request**
 
 `GET {{API_URL}}/api/v1/escalation_chains/`
 
-# Delete an escalation chain
+## Delete an escalation chain
 
 ```shell
 curl "{{API_URL}}/api/v1/escalation_chains/F5JU6KJET33FE/" \

@@ -1,18 +1,20 @@
 import React, { useState, useCallback } from 'react';
 
-import { HorizontalGroup, VerticalGroup, Modal, Tooltip, Icon, Button } from '@grafana/ui';
+import { Stack, Modal, Tooltip, Icon, Button } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { debounce } from 'lodash-es';
 import { observer } from 'mobx-react';
 
 import { TemplateForEdit } from 'components/AlertTemplates/CommonAlertTemplatesForm.config';
-import Block from 'components/GBlock/Block';
-import MonacoEditor from 'components/MonacoEditor/MonacoEditor';
-import Text from 'components/Text/Text';
-import { AlertReceiveChannel } from 'models/alert_receive_channel/alert_receive_channel.types';
+import { Block } from 'components/GBlock/Block';
+import { MonacoEditor } from 'components/MonacoEditor/MonacoEditor';
+import { Text } from 'components/Text/Text';
+import { AlertReceiveChannelHelper } from 'models/alert_receive_channel/alert_receive_channel.helpers';
 import { ChannelFilter } from 'models/channel_filter/channel_filter.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { useStore } from 'state/useStore';
-import { openErrorNotification } from 'utils';
+import { StackSize } from 'utils/consts';
+import { openErrorNotification } from 'utils/utils';
 
 import styles from './EditRegexpRouteTemplateModal.module.css';
 
@@ -21,13 +23,13 @@ const cx = cn.bind(styles);
 interface EditRegexpRouteTemplateModalProps {
   channelFilterId: ChannelFilter['id'];
   template?: TemplateForEdit;
-  alertReceiveChannelId?: AlertReceiveChannel['id'];
+  alertReceiveChannelId?: ApiSchemas['AlertReceiveChannel']['id'];
   onHide: () => void;
   onUpdateRoute: (values: any, channelFilterId: ChannelFilter['id'], type: number) => void;
   onOpenEditIntegrationTemplate?: (templateName: string, channelFilterId: ChannelFilter['id']) => void;
 }
 
-const EditRegexpRouteTemplateModal = observer((props: EditRegexpRouteTemplateModalProps) => {
+export const EditRegexpRouteTemplateModal = observer((props: EditRegexpRouteTemplateModalProps) => {
   const { onHide, onUpdateRoute, channelFilterId, onOpenEditIntegrationTemplate, alertReceiveChannelId } = props;
   const store = useStore();
 
@@ -58,20 +60,14 @@ const EditRegexpRouteTemplateModal = observer((props: EditRegexpRouteTemplateMod
     }
   }, [regexpTemplateBody]);
 
-  const handleConvertToJinja2 = useCallback(() => {
-    alertReceiveChannelStore.convertRegexpTemplateToJinja2Template(channelFilterId).then((response) => {
-      alertReceiveChannelStore
-        .saveChannelFilter(channelFilterId, {
-          filtering_term: response?.filtering_term_as_jinja2,
-          filtering_term_type: 1,
-        })
-        .then(() => {
-          alertReceiveChannelStore.updateChannelFilters(alertReceiveChannelId, true).then(() => {
-            onOpenEditIntegrationTemplate('route_template', channelFilterId);
-          });
-        });
+  const handleConvertToJinja2 = useCallback(async () => {
+    const response = await AlertReceiveChannelHelper.convertRegexpTemplateToJinja2Template(channelFilterId);
+    await alertReceiveChannelStore.saveChannelFilter(channelFilterId, {
+      filtering_term: response?.filtering_term_as_jinja2,
+      filtering_term_type: 1,
     });
-
+    await alertReceiveChannelStore.fetchChannelFilters(alertReceiveChannelId, true);
+    onOpenEditIntegrationTemplate('route_template', channelFilterId);
     onHide();
   }, []);
 
@@ -83,9 +79,9 @@ const EditRegexpRouteTemplateModal = observer((props: EditRegexpRouteTemplateMod
       title="Edit regular expression template"
       className={cx('regexp-template-editor-modal')}
     >
-      <VerticalGroup spacing="lg">
-        <VerticalGroup spacing="xs">
-          <HorizontalGroup spacing={'xs'}>
+      <Stack direction="column" gap={StackSize.lg}>
+        <Stack direction="column" gap={StackSize.xs}>
+          <Stack gap={StackSize.xs}>
             <Text type={'secondary'}>Regular expression</Text>
             <Tooltip
               content={'Use python style regex to filter incidents based on a expression'}
@@ -93,7 +89,7 @@ const EditRegexpRouteTemplateModal = observer((props: EditRegexpRouteTemplateMod
             >
               <Icon name={'info-circle'} />
             </Tooltip>
-          </HorizontalGroup>
+          </Stack>
 
           <div className={cx('regexp-template-code', { 'regexp-template-code-error': showErrorTemplate })}>
             <MonacoEditor
@@ -104,16 +100,16 @@ const EditRegexpRouteTemplateModal = observer((props: EditRegexpRouteTemplateMod
               onChange={handleRegexpBodyChange()}
             />
           </div>
-        </VerticalGroup>
-        <VerticalGroup>
+        </Stack>
+        <Stack direction="column">
           <Text>Click "Convert to Jinja2" for a rich editor with debugger and additional functionality</Text>
           <Text type={'secondary'}>Your template will be saved as the jinja2 template below</Text>
-        </VerticalGroup>
+        </Stack>
         <Block bordered fullWidth withBackground>
           <Text type="link">{templateJinja2Body}</Text>
         </Block>
 
-        <HorizontalGroup justify={'flex-end'}>
+        <Stack justifyContent={'flex-end'}>
           <Button variant={'secondary'} onClick={onHide}>
             Cancel
           </Button>
@@ -123,10 +119,8 @@ const EditRegexpRouteTemplateModal = observer((props: EditRegexpRouteTemplateMod
           <Button variant={'primary'} onClick={() => handleSave()}>
             Save
           </Button>
-        </HorizontalGroup>
-      </VerticalGroup>
+        </Stack>
+      </Stack>
     </Modal>
   );
 });
-
-export default EditRegexpRouteTemplateModal;

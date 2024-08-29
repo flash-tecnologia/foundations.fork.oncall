@@ -11,6 +11,7 @@ from apps.slack.errors import (
     SlackAPIError,
     SlackAPIFetchMembersFailedError,
     SlackAPIMethodNotSupportedForChannelTypeError,
+    SlackAPIRatelimitError,
     SlackAPITokenError,
 )
 
@@ -81,7 +82,8 @@ class SlackMessage(models.Model):
 
     @property
     def permalink(self) -> typing.Optional[str]:
-        if self.cached_permalink or not self.slack_team_identity:
+        # Don't send request for permalink if there is no slack_team_identity or slack token has been revoked
+        if self.cached_permalink or not self.slack_team_identity or self.slack_team_identity.detected_token_revoked:
             return self.cached_permalink
 
         try:
@@ -95,6 +97,10 @@ class SlackMessage(models.Model):
         self.save(update_fields=["cached_permalink"])
 
         return self.cached_permalink
+
+    @property
+    def deep_link(self) -> str:
+        return f"https://slack.com/app_redirect?channel={self.channel_id}&team={self.slack_team_identity.slack_id}&message={self.slack_id}"
 
     def send_slack_notification(self, user, alert_group, notification_policy):
         from apps.base.models import UserNotificationPolicyLogRecord
@@ -131,7 +137,7 @@ class SlackMessage(models.Model):
                 },
             }
         ]
-        sc = SlackClient(self.slack_team_identity)
+        sc = SlackClient(self.slack_team_identity, enable_ratelimit_retry=True)
         channel_id = slack_message.channel_id
 
         try:
@@ -142,6 +148,18 @@ class SlackMessage(models.Model):
                 thread_ts=slack_message.slack_id,
                 unfurl_links=True,
             )
+        except SlackAPIRatelimitError:
+            UserNotificationPolicyLogRecord(
+                author=user,
+                type=UserNotificationPolicyLogRecord.TYPE_PERSONAL_NOTIFICATION_FAILED,
+                notification_policy=notification_policy,
+                alert_group=alert_group,
+                reason="Slack API rate limit error",
+                notification_step=notification_policy.step,
+                notification_channel=notification_policy.notify_by,
+                notification_error_code=UserNotificationPolicyLogRecord.ERROR_NOTIFICATION_IN_SLACK_RATELIMIT,
+            ).save()
+            return
         except SlackAPITokenError:
             UserNotificationPolicyLogRecord(
                 author=user,
@@ -172,6 +190,15 @@ class SlackMessage(models.Model):
                 organization=self.organization,
                 _slack_team_identity=self.slack_team_identity,
                 channel_id=channel_id,
+            )
+            # create success record
+            UserNotificationPolicyLogRecord.objects.create(
+                author=user,
+                type=UserNotificationPolicyLogRecord.TYPE_PERSONAL_NOTIFICATION_SUCCESS,
+                notification_policy=notification_policy,
+                alert_group=alert_group,
+                notification_step=notification_policy.step,
+                notification_channel=notification_policy.notify_by,
             )
 
         # Check if escalated user is in channel. Otherwise send notification and request to invite him.

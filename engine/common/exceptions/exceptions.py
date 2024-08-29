@@ -19,5 +19,9 @@ class UnableToSendDemoAlert(OperationCouldNotBePerformedError):
     pass
 
 
-class UserNotificationPolicyCouldNotBeDeleted(OperationCouldNotBePerformedError):
-    pass
+class BacksyncIntegrationRequestError(Exception):
+    """Error making request to alert receive channel backsync connection."""
+
+    def __init__(self, *args, **kwargs):
+        self.error_msg = kwargs.pop("error_msg", None)
+        super().__init__(*args, **kwargs)

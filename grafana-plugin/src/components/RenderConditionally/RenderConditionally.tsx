@@ -2,11 +2,20 @@ import React, { FC, ReactNode } from 'react';
 
 interface RenderConditionallyProps {
   shouldRender?: boolean;
-  children: ReactNode;
+  children?: ReactNode;
+  render?: () => ReactNode;
   backupChildren?: ReactNode;
 }
 
-const RenderConditionally: FC<RenderConditionallyProps> = ({ shouldRender, children, backupChildren = null }) =>
-  shouldRender ? <>{children}</> : <>{backupChildren}</>;
+export const RenderConditionally: FC<RenderConditionallyProps> = ({
+  shouldRender,
+  children,
+  render,
+  backupChildren = null,
+}) => {
+  if (render) {
+    return shouldRender ? <>{render()}</> : <>{backupChildren}</>;
+  }
 
-export default RenderConditionally;
+  return shouldRender ? <>{children}</> : <>{backupChildren}</>;
+};

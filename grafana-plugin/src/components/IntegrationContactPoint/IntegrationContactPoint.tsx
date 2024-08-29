@@ -1,31 +1,22 @@
 import React, { useEffect, useReducer } from 'react';
 
 import { SelectableValue } from '@grafana/data';
-import {
-  Button,
-  Drawer,
-  HorizontalGroup,
-  Icon,
-  IconButton,
-  Input,
-  RadioButtonGroup,
-  Select,
-  Tooltip,
-  VerticalGroup,
-} from '@grafana/ui';
+import { Button, Drawer, Icon, IconButton, Input, RadioButtonGroup, Select, Tooltip, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 
-import GTable from 'components/GTable/GTable';
-import IntegrationBlock from 'components/Integrations/IntegrationBlock';
-import Tag from 'components/Tag/Tag';
-import Text from 'components/Text/Text';
-import WithConfirm from 'components/WithConfirm/WithConfirm';
-import { AlertReceiveChannel, ContactPoint } from 'models/alert_receive_channel/alert_receive_channel.types';
+import { GTable } from 'components/GTable/GTable';
+import { IntegrationBlock } from 'components/Integrations/IntegrationBlock';
+import { IntegrationTag } from 'components/Integrations/IntegrationTag';
+import { Text } from 'components/Text/Text';
+import { WithConfirm } from 'components/WithConfirm/WithConfirm';
+import { AlertReceiveChannelHelper } from 'models/alert_receive_channel/alert_receive_channel.helpers';
+import { ContactPoint } from 'models/alert_receive_channel/alert_receive_channel.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import styles from 'pages/integration/Integration.module.scss';
 import { useStore } from 'state/useStore';
-import { openErrorNotification, openNotification } from 'utils';
-import { getVar } from 'utils/DOM';
+import { GENERIC_ERROR, StackSize } from 'utils/consts';
+import { openErrorNotification, openNotification } from 'utils/utils';
 
 const cx = cn.bind(styles);
 
@@ -45,8 +36,8 @@ interface IntegrationContactPointState {
   contactPointOptions: Array<{ label: string; value: string }>;
 }
 
-const IntegrationContactPoint: React.FC<{
-  id: AlertReceiveChannel['id'];
+export const IntegrationContactPoint: React.FC<{
+  id: ApiSchemas['AlertReceiveChannel']['id'];
 }> = observer(({ id }) => {
   const { alertReceiveChannelStore } = useStore();
   const contactPoints = alertReceiveChannelStore.connectedContactPoints[id];
@@ -84,7 +75,7 @@ const IntegrationContactPoint: React.FC<{
 
   useEffect(() => {
     (async function () {
-      const response = await alertReceiveChannelStore.getGrafanaAlertingContactPoints();
+      const response = await AlertReceiveChannelHelper.getGrafanaAlertingContactPoints();
       setState({
         allContactPoints: response,
         dataSourceOptions: response.map((res) => ({ label: res.name, value: res.uid })),
@@ -120,37 +111,33 @@ const IntegrationContactPoint: React.FC<{
                 />
 
                 <div className={cx('contactpoints__connect')}>
-                  <VerticalGroup spacing="md">
+                  <Stack direction="column" gap={StackSize.md}>
                     <div
                       className={cx('contactpoints__connect-toggler')}
                       onClick={() => setState({ isConnectOpen: !isConnectOpen })}
                     >
-                      <HorizontalGroup justify="space-between">
-                        <HorizontalGroup spacing="xs" align="center">
+                      <Stack justifyContent="space-between">
+                        <Stack gap={StackSize.xs} alignItems="center">
                           <Text type="primary">Grafana Alerting Contact point</Text>
                           <Icon name="info-circle" />
-                        </HorizontalGroup>
+                        </Stack>
 
                         {isConnectOpen ? <Icon name="arrow-down" /> : <Icon name="arrow-right" />}
-                      </HorizontalGroup>
+                      </Stack>
                     </div>
 
                     {renderConnectSection()}
-                  </VerticalGroup>
+                  </Stack>
                 </div>
               </div>
             </Drawer>
           )}
 
-          <HorizontalGroup spacing="md">
-            <Tag color={getVar('--tag-secondary-transparent')} border={getVar('--border-weak')} className={cx('tag')}>
-              <Text type="primary" size="small" className={cx('radius')}>
-                Contact point
-              </Text>
-            </Tag>
+          <Stack gap={StackSize.md}>
+            <IntegrationTag>Contact point</IntegrationTag>
 
             {contactPoints?.length ? (
-              <HorizontalGroup>
+              <Stack>
                 <Text type="primary">
                   {contactPoints.length} contact point{contactPoints.length === 1 ? '' : 's'} connected
                 </Text>
@@ -165,16 +152,16 @@ const IntegrationContactPoint: React.FC<{
                     </div>
                   </Tooltip>
                 )}
-              </HorizontalGroup>
+              </Stack>
             ) : (
-              <HorizontalGroup spacing="xs">
+              <Stack gap={StackSize.xs}>
                 {renderExclamationIcon()}
                 <Text type="primary" data-testid="integration-escalation-chain-not-selected">
                   Connect Alerting Contact point to receive alerts
                 </Text>
-              </HorizontalGroup>
+              </Stack>
             )}
-          </HorizontalGroup>
+          </Stack>
 
           <Button
             variant={'secondary'}
@@ -196,7 +183,7 @@ const IntegrationContactPoint: React.FC<{
     }
 
     return (
-      <VerticalGroup spacing="md">
+      <Stack direction="column" gap={StackSize.md}>
         <RadioButtonGroup
           options={radioOptions}
           value={isExistingContactPoint ? 'existing' : 'new'}
@@ -227,7 +214,7 @@ const IntegrationContactPoint: React.FC<{
         ) : (
           <Input
             value={selectedContactPoint}
-            placeholder="Choose Contact Point"
+            placeholder="Enter New Contact Point Name"
             onChange={({ target }) => {
               const value = (target as HTMLInputElement).value;
               setState({ selectedContactPoint: value });
@@ -235,7 +222,7 @@ const IntegrationContactPoint: React.FC<{
           />
         )}
 
-        <HorizontalGroup align="center">
+        <Stack alignItems="center">
           <Button
             variant="primary"
             disabled={!selectedAlertManager || !selectedContactPoint || isLoading}
@@ -247,14 +234,25 @@ const IntegrationContactPoint: React.FC<{
             Cancel
           </Button>
           {isLoading && <Icon name="fa fa-spinner" size="md" className={cx('loadingPlaceholder')} />}
-        </HorizontalGroup>
-      </VerticalGroup>
+        </Stack>
+      </Stack>
     );
   }
 
   function renderActions(item: ContactPoint) {
+    const onDisconnect = async () => {
+      try {
+        await AlertReceiveChannelHelper.disconnectContactPoint(id, item.dataSourceId, item.contactPoint);
+        closeDrawer();
+        openNotification('Contact point has been removed');
+        alertReceiveChannelStore.fetchConnectedContactPoints(id);
+      } catch (_err) {
+        openErrorNotification(GENERIC_ERROR);
+      }
+    };
+
     return (
-      <HorizontalGroup spacing="md">
+      <Stack gap={StackSize.md}>
         <IconButton
           aria-label="Alert Manager"
           name="external-link-alt"
@@ -269,36 +267,23 @@ const IntegrationContactPoint: React.FC<{
           title={`Disconnect Contact point`}
           confirmText="Disconnect"
           description={
-            <VerticalGroup spacing="md">
+            <Stack direction="column" gap={StackSize.md}>
               <Text type="primary">
                 When the contact point will be disconnected, the Integration will no longer receive alerts for it.
               </Text>
               <Text type="primary">You can add new contact point at any time.</Text>
-            </VerticalGroup>
+            </Stack>
           }
         >
-          <IconButton
-            aria-label="Disconnect Contact Point"
-            name="trash-alt"
-            onClick={() => {
-              alertReceiveChannelStore
-                .disconnectContactPoint(id, item.dataSourceId, item.contactPoint)
-                .then(() => {
-                  closeDrawer();
-                  openNotification('Contact point has been removed');
-                  alertReceiveChannelStore.updateConnectedContactPoints(id);
-                })
-                .catch(() => openErrorNotification('An error has occurred. Please try again.'));
-            }}
-          />
+          <IconButton aria-label="Disconnect Contact Point" name="trash-alt" onClick={onDisconnect} />
         </WithConfirm>
-      </HorizontalGroup>
+      </Stack>
     );
   }
 
   function renderContactPointName(item: ContactPoint) {
     return (
-      <HorizontalGroup spacing="xs">
+      <Stack gap={StackSize.xs}>
         <Text type="primary">{item.contactPoint}</Text>
 
         {!item.notificationConnected && (
@@ -309,7 +294,7 @@ const IntegrationContactPoint: React.FC<{
             {renderExclamationIcon()}
           </Tooltip>
         )}
-      </HorizontalGroup>
+      </Stack>
     );
   }
 
@@ -334,23 +319,21 @@ const IntegrationContactPoint: React.FC<{
     });
   }
 
-  function onContactPointConnect() {
+  async function onContactPointConnect() {
     setState({ isLoading: true });
-
-    (isExistingContactPoint
-      ? alertReceiveChannelStore.connectContactPoint(id, selectedAlertManager, selectedContactPoint)
-      : alertReceiveChannelStore.createContactPoint(id, selectedAlertManager, selectedContactPoint)
-    )
-      .then(() => {
-        closeDrawer();
-        openNotification('A new contact point has been connected to your integration');
-        alertReceiveChannelStore.updateConnectedContactPoints(id);
-      })
-      .catch((ex) => {
-        const error = ex.response?.data?.detail ?? 'An error has occurred. Please try again.';
-        openErrorNotification(error);
-      })
-      .finally(() => setState({ isLoading: false }));
+    try {
+      await (isExistingContactPoint
+        ? AlertReceiveChannelHelper.connectContactPoint(id, selectedAlertManager, selectedContactPoint)
+        : AlertReceiveChannelHelper.createContactPoint(id, selectedAlertManager, selectedContactPoint));
+      closeDrawer();
+      openNotification('A new contact point has been connected to your integration');
+      alertReceiveChannelStore.fetchConnectedContactPoints(id);
+    } catch (ex) {
+      const error = ex.response?.data?.detail ?? GENERIC_ERROR;
+      openErrorNotification(error);
+    } finally {
+      setState({ isLoading: false });
+    }
   }
 
   function onAlertManagerChange(option: SelectableValue<string>) {
@@ -390,5 +373,3 @@ const IntegrationContactPoint: React.FC<{
     ];
   }
 });
-
-export default IntegrationContactPoint;

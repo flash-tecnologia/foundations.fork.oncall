@@ -1,4 +1,4 @@
-import { action, observable } from 'mobx';
+import { action, observable, makeObservable } from 'mobx';
 
 interface LoadingResult {
   [key: string]: boolean;
@@ -8,9 +8,19 @@ class LoaderStoreClass {
   @observable
   items: LoadingResult = {};
 
-  @action
-  setLoadingAction(actionKey: string, isLoading: boolean) {
-    this.items[actionKey] = isLoading;
+  constructor() {
+    makeObservable(this);
+  }
+
+  @action.bound
+  setLoadingAction(actionKey: string | string[], isLoading: boolean) {
+    if (Array.isArray(actionKey)) {
+      actionKey.forEach((key) => {
+        this.items[key] = isLoading;
+      });
+    } else {
+      this.items[actionKey] = isLoading;
+    }
   }
 
   isLoading(actionKey: string): boolean {

@@ -1,6 +1,7 @@
 import logging
 import typing
 
+from django.conf import settings
 from django.db import models
 from django.db.models import JSONField
 
@@ -14,7 +15,6 @@ from apps.slack.errors import (
     SlackAPITokenError,
 )
 from apps.user_management.models.user import User
-from common.insight_log.chatops_insight_logs import ChatOpsEvent, ChatOpsTypePlug, write_chatops_insight_log
 
 if typing.TYPE_CHECKING:
     from django.db.models.manager import RelatedManager
@@ -49,36 +49,40 @@ class SlackTeamIdentity(models.Model):
     # response after oauth.access. This field is used to reinstall app to another OnCall workspace
     cached_reinstall_data = JSONField(null=True, default=None)
 
+    # Do not use directly, use the "needs_reinstall" property instead
+    _unified_slack_app_installed = models.BooleanField(null=True, default=False)
+
     class Meta:
         ordering = ("datetime",)
 
     def __str__(self):
         return f"{self.pk}: {self.name}"
 
-    def update_oauth_fields(self, user, organization, reinstall_data):
+    def update_oauth_fields(self, user, organization, oauth_response):
         logger.info(f"updated oauth_fields for sti {self.pk}")
         from apps.slack.models import SlackUserIdentity
 
         organization.slack_team_identity = self
         organization.save(update_fields=["slack_team_identity"])
         slack_user_identity, _ = SlackUserIdentity.objects.get_or_create(
-            slack_id=reinstall_data["authed_user"]["id"],
+            slack_id=oauth_response["authed_user"]["id"],
             slack_team_identity=self,
         )
         user.slack_user_identity = slack_user_identity
         user.save(update_fields=["slack_user_identity"])
-        self.bot_access_token = reinstall_data["access_token"]
-        self.bot_user_id = reinstall_data["bot_user_id"]
-        self.oauth_scope = reinstall_data["scope"]
-        self.cached_name = reinstall_data["team"]["name"]
-        self.access_token = reinstall_data["authed_user"]["access_token"]
+        self.bot_access_token = oauth_response["access_token"]
+        self.bot_user_id = oauth_response["bot_user_id"]
+        self.oauth_scope = oauth_response["scope"]
+        self.cached_name = oauth_response["team"]["name"]
+        self.access_token = oauth_response["authed_user"]["access_token"]
         self.installed_by = slack_user_identity
         self.cached_reinstall_data = None
         self.installed_via_granular_permissions = True
+
+        if settings.UNIFIED_SLACK_APP_ENABLED:
+            self._unified_slack_app_installed = True
+
         self.save()
-        write_chatops_insight_log(
-            author=user, event_name=ChatOpsEvent.WORKSPACE_CONNECTED, chatops_type=ChatOpsTypePlug.SLACK.value
-        )
 
     def get_cached_channels(self, search_term=None, slack_id=None):
         queryset = self.cached_channels
@@ -132,6 +136,10 @@ class SlackTeamIdentity(models.Model):
             self.cached_app_id = app_id
             self.save(update_fields=["cached_app_id"])
         return self.cached_app_id
+
+    @property
+    def needs_reinstall(self):
+        return settings.UNIFIED_SLACK_APP_ENABLED and not self._unified_slack_app_installed
 
     def get_users_from_slack_conversation_for_organization(self, channel_id, organization):
         sc = SlackClient(self)

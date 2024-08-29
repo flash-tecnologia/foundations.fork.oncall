@@ -11,10 +11,14 @@ from django.utils import timezone
 from mirage import fields as mirage_fields
 
 from apps.alerts.models import MaintainableObject
-from apps.user_management.constants import AlertGroupTableColumn
+from apps.chatops_proxy.utils import (
+    register_oncall_tenant_with_async_fallback,
+    unlink_slack_team,
+    unregister_oncall_tenant,
+)
 from apps.user_management.subscription_strategy import FreePublicBetaSubscriptionStrategy
+from apps.user_management.types import AlertGroupTableColumn
 from common.insight_log import ChatOpsEvent, ChatOpsTypePlug, write_chatops_insight_log
-from common.oncall_gateway import create_oncall_connector, delete_oncall_connector, delete_slack_connector
 from common.public_primary_keys import generate_public_primary_key, increase_public_primary_key_length
 
 if typing.TYPE_CHECKING:
@@ -61,7 +65,7 @@ class OrganizationQuerySet(models.QuerySet):
     def create(self, **kwargs):
         instance = super().create(**kwargs)
         if settings.FEATURE_MULTIREGION_ENABLED:
-            create_oncall_connector(str(instance.uuid), settings.ONCALL_BACKEND_REGION)
+            register_oncall_tenant_with_async_fallback(instance)
         return instance
 
     def delete(self):
@@ -104,9 +108,9 @@ class Organization(MaintainableObject):
 
     def delete(self):
         if settings.FEATURE_MULTIREGION_ENABLED:
-            delete_oncall_connector(str(self.uuid))
-            if self.slack_team_identity:
-                delete_slack_connector(str(self.uuid))
+            unregister_oncall_tenant(str(self.uuid), settings.ONCALL_BACKEND_REGION)
+            if self.slack_team_identity and not settings.UNIFIED_SLACK_APP_ENABLED:
+                unlink_slack_team(str(self.uuid), self.slack_team_identity.slack_id)
         self.deleted_at = timezone.now()
         self.save(update_fields=["deleted_at"])
 
@@ -248,6 +252,7 @@ class Organization(MaintainableObject):
 
     is_rbac_permissions_enabled = models.BooleanField(default=False)
     is_grafana_incident_enabled = models.BooleanField(default=False)
+    is_grafana_labels_enabled = models.BooleanField(default=False, null=True)
 
     alert_group_table_columns: list[AlertGroupTableColumn] | None = JSONField(default=None, null=True)
     grafana_incident_backend_url = models.CharField(max_length=300, null=True, default=None)
@@ -323,16 +328,20 @@ class Organization(MaintainableObject):
         """
         from apps.alerts.models import AlertReceiveChannel
 
-        return self.alert_receive_channels.annotate(
-            num_channel_filters=Count("channel_filters"),
-            # used to determine if the organization has telegram configured
-            num_org_telegram_channels=Count("organization__telegram_channel"),
-        ).filter(
-            Q(num_channel_filters__gt=1)
-            | (Q(organization__slack_team_identity__isnull=False) | Q(num_org_telegram_channels__gt=0))
-            | Q(channel_filters__is_default=True, channel_filters__escalation_chain__isnull=False)
-            | Q(channel_filters__is_default=True, channel_filters__notification_backends__isnull=False),
-            integration=AlertReceiveChannel.INTEGRATION_DIRECT_PAGING,
+        return (
+            self.alert_receive_channels.annotate(
+                num_channel_filters=Count("channel_filters"),
+                # used to determine if the organization has telegram configured
+                num_org_telegram_channels=Count("organization__telegram_channel"),
+            )
+            .filter(
+                Q(num_channel_filters__gt=1)
+                | (Q(organization__slack_team_identity__isnull=False) | Q(num_org_telegram_channels__gt=0))
+                | Q(channel_filters__is_default=True, channel_filters__escalation_chain__isnull=False)
+                | Q(channel_filters__is_default=True, channel_filters__notification_backends__isnull=False),
+                integration=AlertReceiveChannel.INTEGRATION_DIRECT_PAGING,
+            )
+            .distinct()
         )
 
     @property

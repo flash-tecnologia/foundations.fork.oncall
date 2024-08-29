@@ -16,10 +16,8 @@ except ModuleNotFoundError:
     # Only works under uwsgi web server environment
     pass
 
-
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 SLACK_SIGNING_SECRET_LIVE = os.environ.get("SLACK_SIGNING_SECRET_LIVE", "")
-
 
 STATICFILES_DIRS = [
     "/etc/app/static",
@@ -55,5 +53,5 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "DEFAULT_RENDERER_CLASSES": ("rest_framework.renderers.JSONRenderer",),
-    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_SCHEMA_CLASS": "engine.schema.CustomAutoSchema",
 }

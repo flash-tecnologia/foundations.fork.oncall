@@ -1,41 +1,40 @@
 import React from 'react';
 
-import { SelectableValue } from '@grafana/data';
-import { Button, IconButton, Select } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { css, cx } from '@emotion/css';
+import { GrafanaTheme2, SelectableValue } from '@grafana/data';
+import { Button, IconButton, Select, withTheme2 } from '@grafana/ui';
+import { isNumber } from 'lodash';
 import { SortableElement } from 'react-sortable-hoc';
 
-import PluginLink from 'components/PluginLink/PluginLink';
-import Timeline from 'components/Timeline/Timeline';
+import { PluginLink } from 'components/PluginLink/PluginLink';
+import { Timeline } from 'components/Timeline/Timeline';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
-import { Channel } from 'models/channel';
-import { NotificationPolicyType, prepareNotificationPolicy } from 'models/notification_policy';
-import { NotifyBy } from 'models/notify_by';
-import { User } from 'models/user/user.types';
-import { WaitDelay } from 'models/wait_delay';
-import { RootStore } from 'state';
+import { Channel } from 'models/channel/channel';
+import { NotificationPolicyType, prepareNotificationPolicy } from 'models/notification_policy/notification_policy';
+import { ApiSchemas } from 'network/oncall-api/api.types';
 import { AppFeature } from 'state/features';
-import { UserAction } from 'utils/authorization';
+import { RootStore } from 'state/rootStore';
+import { SelectOption } from 'state/types';
+import { UserAction } from 'utils/authorization/authorization';
+import { openWarningNotification } from 'utils/utils';
 
-import DragHandle from './DragHandle';
-import PolicyNote from './PolicyNote';
-
-import styles from './NotificationPolicy.module.css';
-
-const cx = cn.bind(styles);
+import { DragHandle } from './DragHandle';
+import { POLICY_DURATION_LIST_MINUTES, POLICY_DURATION_LIST_SECONDS } from './Policy.consts';
+import { PolicyNote } from './PolicyNote';
 
 export interface NotificationPolicyProps {
+  theme: GrafanaTheme2;
   data: NotificationPolicyType;
   slackTeamIdentity?: {
     general_log_channel_pk: Channel['id'];
   };
-  slackUserIdentity?: User['slack_user_identity'];
+  slackUserIdentity?: ApiSchemas['User']['slack_user_identity'];
   onChange: (id: NotificationPolicyType['id'], value: NotificationPolicyType) => void;
   onDelete: (id: string) => void;
   notificationChoices: any[];
   channels?: any[];
-  waitDelays?: WaitDelay[];
-  notifyByOptions?: NotifyBy[];
+  waitDelays?: SelectOption[];
+  notifyByOptions?: SelectOption[];
   telegramVerified: boolean;
   phoneStatus: number;
   isMobileAppConnected: boolean;
@@ -48,21 +47,26 @@ export interface NotificationPolicyProps {
 }
 
 export class NotificationPolicy extends React.Component<NotificationPolicyProps, any> {
+  constructor(props: NotificationPolicyProps) {
+    super(props);
+  }
+
   render() {
-    const { data, notificationChoices, number, color, userAction, isDisabled } = this.props;
+    const { data, notificationChoices, number, color, userAction, isDisabled, theme } = this.props;
     const { id, step } = data;
+    const styles = getStyles(theme);
 
     return (
-      <Timeline.Item className={cx('root')} number={number} backgroundColor={color}>
-        <div className={cx('step')}>
+      <Timeline.Item className={cx(styles.root)} number={number} backgroundHexNumber={color}>
+        <div className={cx(styles.step)}>
           {!isDisabled && (
-            <WithPermissionControlTooltip disableByPaywall userAction={userAction}>
+            <WithPermissionControlTooltip userAction={userAction}>
               <DragHandle />
             </WithPermissionControlTooltip>
           )}
-          <WithPermissionControlTooltip disableByPaywall userAction={userAction}>
+          <WithPermissionControlTooltip userAction={userAction}>
             <Select
-              className={cx('select', 'control')}
+              className={cx(styles.select, styles.control)}
               onChange={this._getOnChangeHandler('step')}
               value={step}
               options={notificationChoices.map((option: any) => ({ label: option.display_name, value: option.value }))}
@@ -73,7 +77,7 @@ export class NotificationPolicy extends React.Component<NotificationPolicyProps,
           <WithPermissionControlTooltip userAction={userAction}>
             <IconButton
               aria-label="Remove"
-              className={cx('control')}
+              className={cx(styles.control)}
               name="trash-alt"
               onClick={this._getDeleteClickHandler(id)}
               variant="secondary"
@@ -172,43 +176,73 @@ export class NotificationPolicy extends React.Component<NotificationPolicyProps,
   }
 
   private _renderWaitDelays(disabled: boolean) {
-    const { data, waitDelays = [], userAction } = this.props;
+    const { data, userAction, theme } = this.props;
     const { wait_delay } = data;
 
+    const styles = getStyles(theme);
+
+    const optionsList = [...POLICY_DURATION_LIST_MINUTES];
+
+    const waitDelayInSeconds = parseFloat(wait_delay);
+    const waitDelayInMinutes = waitDelayInSeconds / 60;
+
+    const optionValue = POLICY_DURATION_LIST_SECONDS.find((delay) => delay.duration === waitDelayInMinutes) || {
+      value: waitDelayInMinutes,
+      label: waitDelayInMinutes,
+    };
+
     return (
-      <WithPermissionControlTooltip userAction={userAction} disableByPaywall>
-        <Select
-          key="wait-delay"
-          placeholder="Wait Delay"
-          className={cx('select', 'control')}
-          // @ts-ignore
-          value={wait_delay}
-          disabled={disabled}
-          onChange={this._getOnChangeHandler('wait_delay')}
-          options={waitDelays.map((waitDelay: WaitDelay) => ({
-            label: waitDelay.display_name,
-            value: waitDelay.value,
-          }))}
-        />
+      <WithPermissionControlTooltip userAction={userAction}>
+        <div className={styles.container}>
+          <Select
+            key="wait-delay"
+            className={cx(styles.delay, styles.control)}
+            value={wait_delay ? optionValue : undefined}
+            disabled={disabled}
+            onChange={(option: SelectableValue) => this._getOnChangeHandler('wait_delay')({ value: option.value * 60 })}
+            options={optionsList}
+            allowCustomValue
+            onCreateOption={(option: string) => {
+              if (!isNumber(+option)) {
+                return;
+              }
+
+              const num = parseFloat(option);
+
+              if (!Number.isInteger(+option)) {
+                return openWarningNotification('Given number must be an integer');
+              }
+
+              if (num < 1 || num > 24 * 60) {
+                return openWarningNotification('Given number must be in the range of 1 minute and 24 hours');
+              }
+
+              this._getOnChangeHandler('wait_delay')({ value: num * 60 });
+            }}
+          />
+          minute(s)
+        </div>
       </WithPermissionControlTooltip>
     );
   }
 
   private _renderNotifyBy(disabled: boolean) {
-    const { data, notifyByOptions = [], userAction } = this.props;
+    const { data, notifyByOptions = [], theme, userAction } = this.props;
     const { notify_by } = data;
 
+    const styles = getStyles(theme);
+
     return (
-      <WithPermissionControlTooltip userAction={userAction} disableByPaywall>
+      <WithPermissionControlTooltip userAction={userAction}>
         <Select
           key="notify_by"
           placeholder="Notify by"
-          className={cx('select', 'control')}
+          className={cx(styles.select, styles.control)}
           // @ts-ignore
           value={notify_by}
           disabled={disabled}
           onChange={this._getOnChangeHandler('notify_by')}
-          options={notifyByOptions.map((notifyByOption: NotifyBy) => ({
+          options={notifyByOptions.map((notifyByOption: SelectOption) => ({
             label: notifyByOption.display_name,
             value: notifyByOption.value,
           }))}
@@ -268,4 +302,38 @@ export class NotificationPolicy extends React.Component<NotificationPolicyProps,
   };
 }
 
-export default SortableElement(NotificationPolicy);
+const getStyles = (_theme: GrafanaTheme2) => {
+  return {
+    root: css`
+      z-index: 1062;
+    `,
+
+    step: css`
+      display: flex;
+      align-items: center;
+    `,
+
+    control: css`
+      margin-right: 10px;
+      flex-shrink: 0;
+    `,
+
+    select: css`
+      width: 200px !important;
+      flex-shrink: 0;
+    `,
+
+    delay: css`
+      width: 100px !important;
+    `,
+
+    container: css`
+      width: 200px;
+      display: flex;
+      align-items: center;
+      margin-right: 12px;
+    `,
+  };
+};
+
+export default SortableElement(withTheme2(NotificationPolicy));

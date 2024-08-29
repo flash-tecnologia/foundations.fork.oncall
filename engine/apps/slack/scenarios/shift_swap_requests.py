@@ -5,6 +5,8 @@ import typing
 import humanize
 from django.utils import timezone
 
+from apps.api.permissions import RBACPermission
+from apps.slack.chatops_proxy_routing import make_value
 from apps.slack.models import SlackMessage
 from apps.slack.scenarios import scenario_step
 from apps.slack.types import Block, BlockActionType, EventPayload, PayloadType, ScenarioRoute
@@ -13,6 +15,7 @@ from apps.slack.utils import SlackDateFormat, format_datetime_to_slack, format_d
 if typing.TYPE_CHECKING:
     from apps.schedules.models import ShiftSwapRequest
     from apps.slack.models import SlackTeamIdentity, SlackUserIdentity
+    from apps.user_management.models import Organization
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -21,6 +24,8 @@ SHIFT_SWAP_PK_ACTION_KEY = "shift_swap_request_pk"
 
 
 class BaseShiftSwapRequestStep(scenario_step.ScenarioStep):
+    REQUIRED_PERMISSIONS = [RBACPermission.Permissions.SCHEDULES_WRITE]
+
     def _generate_blocks(self, shift_swap_request: "ShiftSwapRequest") -> Block.AnyBlocks:
         pk = shift_swap_request.pk
 
@@ -140,7 +145,7 @@ class BaseShiftSwapRequestStep(scenario_step.ScenarioStep):
                                     "text": "Accept",
                                     "emoji": True,
                                 },
-                                "value": json.dumps(value),
+                                "value": make_value(value, shift_swap_request.organization),
                                 "action_id": AcceptShiftSwapRequestStep.routing_uid(),
                             },
                         ],
@@ -165,6 +170,9 @@ class BaseShiftSwapRequestStep(scenario_step.ScenarioStep):
         )
 
     def update_message(self, shift_swap_request: "ShiftSwapRequest") -> None:
+        if not shift_swap_request.slack_message:
+            return
+
         self._slack_client.chat_update(
             channel=shift_swap_request.slack_channel_id,
             ts=shift_swap_request.slack_message.slack_id,
@@ -190,10 +198,15 @@ class AcceptShiftSwapRequestStep(BaseShiftSwapRequestStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         from apps.schedules import exceptions
         from apps.schedules.models import ShiftSwapRequest
+
+        if not self.is_authorized():
+            self.open_unauthorized_warning(payload)
+            return
 
         shift_swap_request_pk = json.loads(payload["actions"][0]["value"])[SHIFT_SWAP_PK_ACTION_KEY]
 

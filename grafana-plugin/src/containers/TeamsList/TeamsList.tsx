@@ -1,17 +1,17 @@
 import React, { useCallback, useState } from 'react';
 
-import { Badge, Button, Field, HorizontalGroup, Modal, RadioButtonList, Tooltip, VerticalGroup } from '@grafana/ui';
+import { Badge, Button, Field, Modal, RadioButtonList, Tooltip, Stack } from '@grafana/ui';
 import { observer } from 'mobx-react';
 
-import Avatar from 'components/Avatar/Avatar';
-import GTable from 'components/GTable/GTable';
-import Text from 'components/Text/Text';
+import { Avatar } from 'components/Avatar/Avatar';
+import { GTable } from 'components/GTable/GTable';
+import { Text } from 'components/Text/Text';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
 import { GrafanaTeam } from 'models/grafana_team/grafana_team.types';
 import { useStore } from 'state/useStore';
-import { UserActions } from 'utils/authorization';
+import { UserActions } from 'utils/authorization/authorization';
 
-const TeamsList = observer(() => {
+export const TeamsList = observer(() => {
   const store = useStore();
   const [teamIdToShowModal, setTeamIdToShowModal] = useState<GrafanaTeam['id']>();
 
@@ -51,7 +51,7 @@ const TeamsList = observer(() => {
 
   const renderActionButtons = (record: GrafanaTeam) => {
     const editButton = (
-      <HorizontalGroup justify="flex-end">
+      <Stack justifyContent="flex-end">
         {/* Keep  "Make default" here for backwards compatibility, can be removed in November 2023 */}
         <Tooltip content="This button is moved to your User Profile">
           <Button onClick={() => {}} disabled={true} fill="text">
@@ -70,7 +70,7 @@ const TeamsList = observer(() => {
             Edit
           </Button>
         </WithPermissionControlTooltip>
-      </HorizontalGroup>
+      </Stack>
     );
     return editButton;
   };
@@ -134,7 +134,7 @@ interface TeamModalProps {
   onHide: () => void;
 }
 
-const TeamModal = ({ teamId, onHide }: TeamModalProps) => {
+export const TeamModal = ({ teamId, onHide }: TeamModalProps) => {
   const store = useStore();
   const { grafanaTeamStore } = store;
   const team = grafanaTeamStore.items[teamId];
@@ -143,24 +143,25 @@ const TeamModal = ({ teamId, onHide }: TeamModalProps) => {
     String(Number(team.is_sharing_resources_to_all))
   );
 
-  const handleSubmit = useCallback(() => {
-    Promise.all([
+  const handleSubmit = useCallback(async () => {
+    await Promise.all([
       grafanaTeamStore.updateTeam(teamId, { is_sharing_resources_to_all: Boolean(Number(shareResourceToAll)) }),
-    ]).then(onHide);
+    ]);
+    onHide();
   }, [shareResourceToAll]);
 
   return (
     <Modal
       isOpen
       title={
-        <HorizontalGroup>
+        <Stack>
           <Text.Title level={4}>{team.name} settings</Text.Title>
-        </HorizontalGroup>
+        </Stack>
       }
       onDismiss={onHide}
     >
       <WithPermissionControlTooltip userAction={UserActions.AlertGroupsWrite}>
-        <VerticalGroup>
+        <Stack direction="column">
           <Field label="Who can see the team name and access the team resources">
             <div style={{ marginTop: '8px' }}>
               <RadioButtonList
@@ -174,19 +175,17 @@ const TeamModal = ({ teamId, onHide }: TeamModalProps) => {
               />
             </div>
           </Field>
-        </VerticalGroup>
+        </Stack>
       </WithPermissionControlTooltip>
 
-      <HorizontalGroup>
+      <Stack>
         <Button onClick={onHide} variant="secondary">
           Cancel
         </Button>
         <Button onClick={handleSubmit} variant="primary">
           Save
         </Button>
-      </HorizontalGroup>
+      </Stack>
     </Modal>
   );
 };
-
-export default TeamsList;

@@ -15,16 +15,17 @@ from rest_framework.views import APIView
 from apps.api.permissions import RBACPermission
 from apps.auth_token.auth import PluginAuthentication
 from apps.base.utils import live_settings
+from apps.chatops_proxy.utils import uninstall_slack as uninstall_slack_from_chatops_proxy
 from apps.slack.client import SlackClient
 from apps.slack.errors import SlackAPIError
 from apps.slack.scenarios.alertgroup_appearance import STEPS_ROUTING as ALERTGROUP_APPEARANCE_ROUTING
+from apps.slack.scenarios.alertgroup_timeline import STEPS_ROUTING as ALERTGROUP_TIMELINE_ROUTING
 
 # Importing routes from scenarios
 from apps.slack.scenarios.declare_incident import STEPS_ROUTING as DECLARE_INCIDENT_ROUTING
 from apps.slack.scenarios.distribute_alerts import STEPS_ROUTING as DISTRIBUTION_STEPS_ROUTING
 from apps.slack.scenarios.invited_to_channel import STEPS_ROUTING as INVITED_TO_CHANNEL_ROUTING
 from apps.slack.scenarios.manage_responders import STEPS_ROUTING as MANAGE_RESPONDERS_ROUTING
-from apps.slack.scenarios.manual_incident import STEPS_ROUTING as MANUAL_INCIDENT_ROUTING
 from apps.slack.scenarios.notified_user_not_in_channel import STEPS_ROUTING as NOTIFIED_USER_NOT_IN_CHANNEL_ROUTING
 from apps.slack.scenarios.onboarding import STEPS_ROUTING as ONBOARDING_STEPS_ROUTING
 from apps.slack.scenarios.paging import STEPS_ROUTING as DIRECT_PAGE_ROUTING
@@ -36,14 +37,13 @@ from apps.slack.scenarios.shift_swap_requests import STEPS_ROUTING as SHIFT_SWAP
 from apps.slack.scenarios.slack_channel import STEPS_ROUTING as CHANNEL_ROUTING
 from apps.slack.scenarios.slack_channel_integration import STEPS_ROUTING as SLACK_CHANNEL_INTEGRATION_ROUTING
 from apps.slack.scenarios.slack_usergroup import STEPS_ROUTING as SLACK_USERGROUP_UPDATE_ROUTING
-from apps.slack.tasks import clean_slack_integration_leftovers, unpopulate_slack_user_identities
 from apps.slack.types import EventPayload, EventType, MessageEventSubtype, PayloadType, ScenarioRoute
 from apps.user_management.models import Organization
-from common.insight_log import ChatOpsEvent, ChatOpsTypePlug, write_chatops_insight_log
-from common.oncall_gateway import delete_slack_connector
 
 from .errors import SlackAPITokenError
+from .installation import SlackInstallationExc, uninstall_slack_integration
 from .models import SlackMessage, SlackTeamIdentity, SlackUserIdentity
+from .slash_command import SlashCommand
 
 SCENARIOS_ROUTES: ScenarioRoute.RoutingSteps = []
 SCENARIOS_ROUTES.extend(ONBOARDING_STEPS_ROUTING)
@@ -53,11 +53,11 @@ SCENARIOS_ROUTES.extend(SCHEDULES_ROUTING)
 SCENARIOS_ROUTES.extend(SHIFT_SWAP_REQUESTS_ROUTING)
 SCENARIOS_ROUTES.extend(SLACK_CHANNEL_INTEGRATION_ROUTING)
 SCENARIOS_ROUTES.extend(ALERTGROUP_APPEARANCE_ROUTING)
+SCENARIOS_ROUTES.extend(ALERTGROUP_TIMELINE_ROUTING)
 SCENARIOS_ROUTES.extend(RESOLUTION_NOTE_ROUTING)
 SCENARIOS_ROUTES.extend(SLACK_USERGROUP_UPDATE_ROUTING)
 SCENARIOS_ROUTES.extend(CHANNEL_ROUTING)
 SCENARIOS_ROUTES.extend(PROFILE_UPDATE_ROUTING)
-SCENARIOS_ROUTES.extend(MANUAL_INCIDENT_ROUTING)
 SCENARIOS_ROUTES.extend(DIRECT_PAGE_ROUTING)
 SCENARIOS_ROUTES.extend(MANAGE_RESPONDERS_ROUTING)
 SCENARIOS_ROUTES.extend(DECLARE_INCIDENT_ROUTING)
@@ -358,11 +358,15 @@ class SlackEventApiEndpointView(APIView):
 
                 # Slash commands have to "type"
                 if payload_command and route_payload_type == PayloadType.SLASH_COMMAND:
-                    if payload_command in route["command_name"]:
+                    cmd = SlashCommand.parse(payload)
+                    # Check both command and subcommand for backward compatibility
+                    # So both /grafana escalate and /escalate will work.
+                    if route["matcher"](cmd):
                         Step = route["step"]
                         logger.info("Routing to {}".format(Step))
                         step = Step(slack_team_identity, organization, user)
-                        step.process_scenario(slack_user_identity, slack_team_identity, payload)
+                        org = get_org_from_chatops_proxy_header(request, slack_team_identity)
+                        step.process_scenario(slack_user_identity, slack_team_identity, payload, predefined_org=org)
                         step_was_found = True
 
                 if payload_type == route_payload_type:
@@ -429,8 +433,8 @@ class SlackEventApiEndpointView(APIView):
                             step_was_found = True
 
         if not step_was_found:
-            raise Exception("Step is undefined" + str(payload))
-
+            logger.warning("SlackEventApiEndpointView: Step is undefined" + str(payload))
+            return Response(status=422)
         return Response(status=200)
 
     @staticmethod
@@ -567,25 +571,41 @@ class ResetSlackView(APIView):
     }
 
     def post(self, request):
+        # TODO: this check should be removed once Unified Slack App is release
         if settings.SLACK_INTEGRATION_MAINTENANCE_ENABLED:
-            response = Response(
+            return Response(
                 "Grafana OnCall is temporary unable to connect your slack account or install OnCall to your slack workspace",
                 status=400,
             )
+        if settings.UNIFIED_SLACK_APP_ENABLED:
+            # If unified slack app is enabled - uninstall slack integration from chatops-proxy first and on success -
+            # uninstall it from OnCall.
+            removed = uninstall_slack_from_chatops_proxy(request.user.organization.stack_id, request.user.user_id)
         else:
-            organization = request.auth.organization
-            slack_team_identity = organization.slack_team_identity
-            if slack_team_identity is not None:
-                clean_slack_integration_leftovers.apply_async((organization.pk,))
-                if settings.FEATURE_MULTIREGION_ENABLED:
-                    delete_slack_connector(str(organization.uuid))
-                write_chatops_insight_log(
-                    author=request.user,
-                    event_name=ChatOpsEvent.WORKSPACE_DISCONNECTED,
-                    chatops_type=ChatOpsTypePlug.SLACK.value,
-                )
-                unpopulate_slack_user_identities(organization.pk, True)
-                response = Response(status=200)
-            else:
-                response = Response(status=400)
-        return response
+            # just a placeholder value to continute uninstallation until UNIFIED_SLACK_APP_ENABLED is not enabled
+            removed = True
+        if not removed:
+            return Response({"error": "Failed to uninstall slack integration"}, status=500)
+
+        try:
+            uninstall_slack_integration(request.user.organization, request.user)
+        except SlackInstallationExc as e:
+            return Response({"error": e.error_message}, status=400)
+
+        return Response(status=200)
+
+
+def get_org_from_chatops_proxy_header(request, slack_team_identity) -> Organization | None:
+    """
+    get_org_from_chatops_proxy_header extracts organization from the X-Chatops-Stack-ID header injected by chatops-proxy
+    """
+    stack_id = request.META.get("HTTP_X_CHATOPS_STACK_ID")
+    if not stack_id:
+        return None
+
+    try:
+        # get only orgs linked to the slack workspace to avoid tampering
+        return slack_team_identity.organizations.get(stack_id=stack_id)
+    except Organization.DoesNotExist:
+        logger.info(f"SlackEventApiEndpointView: get_org_from_header: organization with stack_id {stack_id} not found")
+        return None

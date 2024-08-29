@@ -1,9 +1,15 @@
-import { OrgRole } from '@grafana/data';
-import { test as setup, chromium, expect, Page, BrowserContext, FullConfig, APIRequestContext } from '@playwright/test';
+import {
+  test as setup,
+  chromium,
+  type BrowserContext,
+  type FullConfig,
+  type APIRequestContext,
+  Page,
+} from '@playwright/test';
 
 import { VIEWER_USER_STORAGE_STATE, EDITOR_USER_STORAGE_STATE, ADMIN_USER_STORAGE_STATE } from '../playwright.config';
 
-import GrafanaAPIClient from './utils/clients/grafana';
+import grafanaApiClient from './utils/clients/grafana';
 import {
   GRAFANA_ADMIN_PASSWORD,
   GRAFANA_ADMIN_USERNAME,
@@ -13,12 +19,10 @@ import {
   GRAFANA_VIEWER_USERNAME,
   IS_CLOUD,
   IS_OPEN_SOURCE,
-  ONCALL_API_URL,
+  OrgRole,
+  isGrafanaVersionLowerThan,
 } from './utils/constants';
-import { clickButton, getInputByName } from './utils/forms';
-import { goToGrafanaPage } from './utils/navigation';
-
-const grafanaApiClient = new GrafanaAPIClient(GRAFANA_ADMIN_USERNAME, GRAFANA_ADMIN_PASSWORD);
+import { goToOnCallPage } from './utils/navigation';
 
 type UserCreationSettings = {
   adminAuthedRequest: APIRequestContext;
@@ -51,36 +55,35 @@ const generateLoginStorageStateAndOptionallCreateUser = async (
   return browserContext;
 };
 
-/**
- go to config page and wait for plugin icon to be available on left-hand navigation
- */
-const configureOnCallPlugin = async (page: Page): Promise<void> => {
-  /**
-   * go to the oncall plugin configuration page and wait for the page to be loaded
-   */
-  await goToGrafanaPage(page, '/plugins/grafana-oncall-app');
-  await page.waitForSelector('text=Configure Grafana OnCall');
-
-  /**
-   * we may need to fill in the OnCall API URL if it is not set in the process.env
-   * of the frontend build
-   */
-  const onCallApiUrlInput = getInputByName(page, 'onCallApiUrl');
-  const pluginIsAutoConfigured = (await onCallApiUrlInput.count()) === 0;
-
-  if (!pluginIsAutoConfigured) {
-    await onCallApiUrlInput.fill(ONCALL_API_URL);
-    await clickButton({ page, buttonText: 'Connect' });
+const idempotentlyInitializePlugin = async (page: Page) => {
+  await goToOnCallPage(page, 'alert-groups');
+  await page.waitForTimeout(1000);
+  const openPluginConfigurationButton = page.getByRole('button', { name: 'Open configuration' });
+  if (await openPluginConfigurationButton.isVisible()) {
+    await openPluginConfigurationButton.click();
+    // Before 10.3 Admin user needs to create service account manually
+    if (isGrafanaVersionLowerThan('10.3.0')) {
+      await page.getByTestId('recreate-service-account').click();
+    }
+    await page.getByTestId('connect-plugin').click();
+    await page.waitForLoadState('networkidle');
+    await page.getByText('Plugin is connected').waitFor();
   }
+};
 
+const determineGrafanaVersion = async (adminAuthedRequest: APIRequestContext) => {
   /**
-   * wait for the "Connected to OnCall" message to know that everything is properly configured
+   * determine the current Grafana version of the stack in question and set it such that it can be used in the tests
+   * to conditionally skip certain tests.
    *
-   * Regarding increasing the timeout for the "plugin configured" assertion:
-   * This is because it can sometimes take a bit longer for the backend sync to finish. The default assertion
-   * timeout is 5s, which is sometimes not enough if the backend is under load
+   * According to the Playwright docs, the best way to set config like this on the fly, is to set values
+   * on process.env https://playwright.dev/docs/test-global-setup-teardown#example
+   *
+   * TODO: when this bug is fixed in playwright https://github.com/microsoft/playwright/issues/29608
+   * move this to the currentGrafanaVersion fixture
    */
-  await expect(page.getByTestId('status-message-block')).toHaveText(/Connected to OnCall.*/, { timeout: 25_000 });
+  const currentGrafanaVersion = await grafanaApiClient.getGrafanaVersion(adminAuthedRequest);
+  process.env.CURRENT_GRAFANA_VERSION = currentGrafanaVersion;
 };
 
 /**
@@ -88,13 +91,6 @@ const configureOnCallPlugin = async (page: Page): Promise<void> => {
  * https://github.com/grafana/incident/blob/main/plugin/e2e/global-setup.ts
  */
 setup('Configure Grafana OnCall plugin', async ({ request }, { config }) => {
-  /**
-   * Unconditionally marks the setup as "slow", giving it triple the default timeout.
-   * This is mostly useful for the rare case for Cloud Grafana instances where the instance may be down/unavailable
-   * and we need to poll it until it is available
-   */
-  setup.slow();
-
   if (IS_CLOUD) {
     await grafanaApiClient.pollInstanceUntilItIsHealthy(request);
   }
@@ -107,6 +103,10 @@ setup('Configure Grafana OnCall plugin', async ({ request }, { config }) => {
   );
   const adminPage = await adminBrowserContext.newPage();
   const { request: adminAuthedRequest } = adminBrowserContext;
+
+  await determineGrafanaVersion(adminAuthedRequest);
+
+  await idempotentlyInitializePlugin(adminPage);
 
   await generateLoginStorageStateAndOptionallCreateUser(
     config,
@@ -131,11 +131,6 @@ setup('Configure Grafana OnCall plugin', async ({ request }, { config }) => {
     },
     true
   );
-
-  if (IS_OPEN_SOURCE) {
-    // plugin configuration can safely be skipped for cloud environments
-    await configureOnCallPlugin(adminPage);
-  }
 
   await adminBrowserContext.close();
 });

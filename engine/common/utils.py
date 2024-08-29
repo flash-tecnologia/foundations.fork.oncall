@@ -5,6 +5,7 @@ import os
 import random
 import re
 import time
+from contextlib import contextmanager
 from functools import reduce
 
 import factory
@@ -12,6 +13,7 @@ import markdown2
 from bs4 import BeautifulSoup
 from celery.utils.log import get_task_logger
 from celery.utils.time import get_exponential_backoff_interval
+from django.core.cache import cache
 from django.utils.html import urlize
 
 logger = get_task_logger(__name__)
@@ -73,6 +75,30 @@ class OkToRetry:
         )
 
 
+LOCK_EXPIRE = 60 * 10  # Lock expires in 10 minutes
+
+
+# Context manager for tasks that are intended to run once at a time
+# (ie. no parallel instances of the same task running)
+# based on https://docs.celeryq.dev/en/stable/tutorials/task-cookbook.html#ensuring-a-task-is-only-executed-one-at-a-time
+@contextmanager
+def task_lock(lock_id, oid):
+    timeout_at = time.monotonic() + LOCK_EXPIRE - 3
+    # cache.add returns False if the key already exists
+    status = cache.add(lock_id, oid, LOCK_EXPIRE)
+    try:
+        yield status
+    finally:
+        # cache delete may be slow, but we have to use it to take
+        # advantage of using add() for atomic locking
+        if time.monotonic() < timeout_at and status:
+            # don't release the lock if we exceeded the timeout
+            # to lessen the chance of releasing an expired lock
+            # owned by someone else
+            # also don't release the lock if we didn't acquire it
+            cache.delete(lock_id)
+
+
 # lru cache version with addition of timeout.
 # Timeout added to not to occupy memory with too old values
 def timed_lru_cache(timeout: int, maxsize: int = 128, typed: bool = False):
@@ -103,12 +129,22 @@ def getenv_boolean(variable_name: str, default: bool) -> bool:
     return value.lower() in ("true", "1")
 
 
-def getenv_integer(variable_name: str, default: int) -> int:
+def getenv_integer(variable_name: str, default: int | None) -> int | None:
     value = os.environ.get(variable_name)
     if value is None:
         return default
     try:
         return int(value)
+    except ValueError:
+        return default
+
+
+def getenv_float(variable_name: str, default: float) -> float:
+    value = os.environ.get(variable_name)
+    if value is None:
+        return default
+    try:
+        return float(value)
     except ValueError:
         return default
 
@@ -141,7 +177,7 @@ def isoformat_with_tz_suffix(value):
     Default python datetime.isoformat() return tz offset like +00:00 instead of military tz suffix (e.g.Z for UTC)".
     On the other hand DRF returns datetime with military tz suffix.
     This utility function exists to return consistent datetime string in api.
-    Is is copied from DRF DateTimeField.to_representation
+    It is copied from DRF DateTimeField.to_representation
     """
     value = value.isoformat()
     if value.endswith("+00:00"):
@@ -150,7 +186,7 @@ def isoformat_with_tz_suffix(value):
 
 
 def is_string_with_visible_characters(string):
-    return type(string) == str and not string.isspace() and not string == ""
+    return type(string) is str and not string.isspace() and not string == ""
 
 
 def str_or_backup(string, backup):
@@ -213,7 +249,7 @@ def clean_markup(text):
 
 
 def escape_html(text):
-    return html.escape(text)
+    return html.escape(text, quote=False)
 
 
 def urlize_with_respect_to_a(html):

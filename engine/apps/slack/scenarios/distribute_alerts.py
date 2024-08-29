@@ -1,40 +1,29 @@
 import json
 import logging
 import typing
-from contextlib import suppress
 from datetime import datetime
 
 from django.core.cache import cache
-from django.utils import timezone
-from jinja2 import TemplateError
 
 from apps.alerts.constants import ActionSource
 from apps.alerts.incident_appearance.renderers.constants import DEFAULT_BACKUP_TITLE
 from apps.alerts.incident_appearance.renderers.slack_renderer import AlertSlackRenderer
 from apps.alerts.models import Alert, AlertGroup, AlertGroupLogRecord, AlertReceiveChannel, Invitation
-from apps.alerts.tasks import custom_button_result
-from apps.alerts.utils import render_curl_command
 from apps.api.permissions import RBACPermission
+from apps.slack.chatops_proxy_routing import make_private_metadata, make_value
 from apps.slack.constants import CACHE_UPDATE_INCIDENT_SLACK_MESSAGE_LIFETIME
 from apps.slack.errors import (
     SlackAPIChannelArchivedError,
-    SlackAPIChannelInactiveError,
     SlackAPIChannelNotFoundError,
     SlackAPIError,
-    SlackAPIInvalidAuthError,
     SlackAPIMessageNotFoundError,
     SlackAPIRatelimitError,
     SlackAPIRestrictedActionError,
     SlackAPITokenError,
 )
 from apps.slack.scenarios import scenario_step
-from apps.slack.scenarios.slack_renderer import AlertGroupLogSlackRenderer
 from apps.slack.slack_formatter import SlackFormatter
-from apps.slack.tasks import (
-    post_or_update_log_report_message_task,
-    send_message_to_thread_if_bot_not_in_channel,
-    update_incident_slack_message,
-)
+from apps.slack.tasks import send_message_to_thread_if_bot_not_in_channel, update_incident_slack_message
 from apps.slack.types import (
     Block,
     BlockActionType,
@@ -52,6 +41,7 @@ from .step_mixins import AlertGroupActionsMixin
 
 if typing.TYPE_CHECKING:
     from apps.slack.models import SlackTeamIdentity, SlackUserIdentity
+    from apps.user_management.models import Organization
 
 ATTACH_TO_ALERT_GROUPS_LIMIT = 20
 
@@ -76,9 +66,14 @@ class AlertShootingStep(scenario_step.ScenarioStep):
 
         if num_updated_rows == 1:
             try:
-                channel_id = alert.group.channel_filter.slack_channel_id_or_general_log_id
+                channel_id = (
+                    alert.group.channel_filter.slack_channel_id_or_general_log_id
+                    if alert.group.channel_filter
+                    # if channel filter is deleted mid escalation, use default Slack channel
+                    else alert.group.channel.organization.general_log_channel_id
+                )
                 self._send_first_alert(alert, channel_id)
-            except SlackAPIError:
+            except (SlackAPIError, TimeoutError):
                 AlertGroup.objects.filter(pk=alert.group.pk).update(slack_message_sent=False)
                 raise
 
@@ -91,7 +86,6 @@ class AlertShootingStep(scenario_step.ScenarioStep):
             else:
                 # check if alert group was posted to slack before posting message to thread
                 if not alert.group.skip_escalation_in_slack:
-                    self._send_log_report_message(alert.group, channel_id)
                     self._send_message_to_thread_if_bot_not_in_channel(alert.group, channel_id)
         else:
             # check if alert group was posted to slack before updating its message
@@ -204,11 +198,6 @@ class AlertShootingStep(scenario_step.ScenarioStep):
             blocks=blocks,
         )
 
-    def _send_log_report_message(self, alert_group: AlertGroup, channel_id: str) -> None:
-        post_or_update_log_report_message_task.apply_async(
-            (alert_group.pk, self.slack_team_identity.pk),
-        )
-
     def _send_message_to_thread_if_bot_not_in_channel(self, alert_group: AlertGroup, channel_id: str) -> None:
         send_message_to_thread_if_bot_not_in_channel.apply_async(
             (alert_group.pk, self.slack_team_identity.pk, channel_id),
@@ -219,7 +208,8 @@ class AlertShootingStep(scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         pass
 
@@ -236,7 +226,8 @@ class InviteOtherPersonToIncident(AlertGroupActionsMixin, scenario_step.Scenario
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         from apps.user_management.models import User
 
@@ -272,7 +263,8 @@ class SilenceGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
@@ -286,7 +278,9 @@ class SilenceGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
             # Deprecated handler kept for backward compatibility (so older Slack messages can still be processed)
             silence_delay = int(value)
 
-        alert_group.silence_by_user(self.user, silence_delay, action_source=ActionSource.SLACK)
+        alert_group.silence_by_user_or_backsync(
+            self.user, silence_delay=silence_delay, action_source=ActionSource.SLACK
+        )
 
     def process_signal(self, log_record: AlertGroupLogRecord) -> None:
         self.alert_group_slack_service.update_alert_group_slack_message(log_record.alert_group)
@@ -299,14 +293,15 @@ class UnSilenceGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
             self.open_unauthorized_warning(payload)
             return
 
-        alert_group.un_silence_by_user(self.user, action_source=ActionSource.SLACK)
+        alert_group.un_silence_by_user_or_backsync(self.user, action_source=ActionSource.SLACK)
 
     def process_signal(self, log_record: AlertGroupLogRecord) -> None:
         self.alert_group_slack_service.update_alert_group_slack_message(log_record.alert_group)
@@ -319,7 +314,8 @@ class SelectAttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
@@ -335,11 +331,12 @@ class SelectAttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
                 "type": "plain_text",
                 "text": "Attach to Alert Group",
             },
-            "private_metadata": json.dumps(
+            "private_metadata": make_private_metadata(
                 {
                     "organization_id": self.organization.pk if self.organization else alert_group.organization.pk,
                     "alert_group_pk": alert_group.pk,
-                }
+                },
+                self.organization,
             ),
             "close": {"type": "plain_text", "text": "Cancel", "emoji": True},
         }
@@ -394,9 +391,8 @@ class SelectAttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         collected_options: typing.List[CompositionObjectOption] = []
         blocks: Block.AnyBlocks = []
 
-        alert_receive_channel_ids = AlertReceiveChannel.objects.filter(
-            organization=alert_group.channel.organization
-        ).values_list("id", flat=True)
+        org = alert_group.channel.organization
+        alert_receive_channel_ids = AlertReceiveChannel.objects.filter(organization=org).values_list("id", flat=True)
 
         alert_groups_queryset = (
             AlertGroup.objects.prefetch_related(
@@ -408,6 +404,7 @@ class SelectAttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
             .order_by("-pk")
         )
 
+        sf = SlackFormatter(org)
         for alert_group_to_attach in alert_groups_queryset[:ATTACH_TO_ALERT_GROUPS_LIMIT]:
             # long_verbose_name_without_formatting was removed from here because it increases queries count due to
             # alerts.first().
@@ -415,7 +412,6 @@ class SelectAttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
             # prefetch_related.
             first_alert = alert_group_to_attach.alerts.all()[0]
             templated_alert = AlertSlackRenderer(first_alert).templated_alert
-            sf = SlackFormatter(alert_group_to_attach.channel.organization)
             if is_string_with_visible_characters(templated_alert.title):
                 alert_name = templated_alert.title
                 alert_name = sf.format(alert_name)
@@ -430,7 +426,7 @@ class SelectAttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
             collected_options.append(
                 {
                     "text": {"type": "plain_text", "text": f"{alert_name}", "emoji": True},
-                    "value": str(alert_group_to_attach.pk),
+                    "value": make_value({root_ag_id_value_key: alert_group_to_attach.pk}, org),
                 }
             )
         if len(collected_options) > 0:
@@ -485,27 +481,50 @@ class AttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         # submit selection in modal window
         if payload["type"] == PayloadType.VIEW_SUBMISSION:
             alert_group_pk = json.loads(payload["view"]["private_metadata"])["alert_group_pk"]
             alert_group = AlertGroup.objects.get(pk=alert_group_pk)
-            root_alert_group_pk = payload["view"]["state"]["values"][SelectAttachGroupStep.routing_uid()][
-                AttachGroupStep.routing_uid()
-            ]["selected_option"]["value"]
+            root_alert_group_pk = _get_root_alert_group_id_from_value(
+                payload["view"]["state"]["values"][SelectAttachGroupStep.routing_uid()][AttachGroupStep.routing_uid()][
+                    "selected_option"
+                ]["value"]
+            )
             root_alert_group = AlertGroup.objects.get(pk=root_alert_group_pk)
         # old version of attach selection by dropdown
         else:
             try:
-                root_alert_group_pk = int(payload["actions"][0]["selected_options"][0]["value"])
+                root_alert_group_pk = int(
+                    _get_root_alert_group_id_from_value(payload["actions"][0]["selected_options"][0]["value"])
+                )
             except KeyError:
-                root_alert_group_pk = int(payload["actions"][0]["selected_option"]["value"])
+                root_alert_group_pk = int(
+                    _get_root_alert_group_id_from_value(payload["actions"][0]["selected_option"]["value"])
+                )
 
             root_alert_group = AlertGroup.objects.get(pk=root_alert_group_pk)
             alert_group = self.get_alert_group(slack_team_identity, payload)
 
         alert_group.attach_by_user(self.user, root_alert_group, action_source=ActionSource.SLACK)
+
+
+root_ag_id_value_key = "ag_id"
+
+
+def _get_root_alert_group_id_from_value(value: str) -> str:
+    """
+    Extract ag ID from value string.
+    It might be either JSON-encoded object or just a user ID.
+    Json encoded object introduced for Chatops-Proxy routing, plain string with user ID is legacy.
+    """
+    try:
+        data = json.loads(value)
+        return data[root_ag_id_value_key]
+    except json.JSONDecodeError:
+        return value
 
 
 class UnAttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
@@ -515,7 +534,8 @@ class UnAttachGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
@@ -540,7 +560,8 @@ class StopInvitationProcess(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
@@ -560,69 +581,6 @@ class StopInvitationProcess(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self.alert_group_slack_service.update_alert_group_slack_message(log_record.invitation.alert_group)
 
 
-class CustomButtonProcessStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
-    REQUIRED_PERMISSIONS = [RBACPermission.Permissions.ALERT_GROUPS_WRITE]
-
-    def process_scenario(
-        self,
-        slack_user_identity: "SlackUserIdentity",
-        slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
-    ) -> None:
-        from apps.alerts.models import CustomButton
-
-        alert_group = self.get_alert_group(slack_team_identity, payload)
-        if not self.is_authorized(alert_group):
-            self.open_unauthorized_warning(payload)
-            return
-
-        custom_button_pk = payload["actions"][0]["name"].split("_")[1]
-        alert_group_pk = payload["actions"][0]["name"].split("_")[2]
-        try:
-            CustomButton.objects.get(pk=custom_button_pk)
-        except CustomButton.DoesNotExist:
-            warning_text = "Oops! This button was deleted"
-            self.open_warning_window(payload, warning_text=warning_text)
-            self.alert_group_slack_service.update_alert_group_slack_message(alert_group)
-        else:
-            custom_button_result.apply_async(
-                args=(
-                    custom_button_pk,
-                    alert_group_pk,
-                ),
-                kwargs={"user_pk": self.user.pk},
-            )
-
-    def process_signal(self, log_record: AlertGroupLogRecord) -> None:
-        alert_group = log_record.alert_group
-        result_message = log_record.reason
-        custom_button = log_record.custom_button
-        debug_message = ""
-        if not log_record.step_specific_info["is_request_successful"]:
-            with suppress(TemplateError, json.JSONDecodeError):
-                post_kwargs = custom_button.build_post_kwargs(log_record.alert_group.alerts.first())
-                curl_request = render_curl_command(log_record.custom_button.webhook, "POST", post_kwargs)
-                debug_message = f"```{curl_request}```"
-
-        if log_record.author is not None:
-            user_verbal = log_record.author.get_username_with_slack_verbal(mention=True)
-            text = (
-                f"{user_verbal} sent a request from an outgoing webhook `{log_record.custom_button.name}` "
-                f"with the result `{result_message}`"
-            )
-        else:
-            text = (
-                f"A request from an outgoing webhook `{log_record.custom_button.name}` was sent "
-                f"according to escalation policy with the result `{result_message}`"
-            )
-        attachments = [
-            {"callback_id": "alert", "text": debug_message},
-        ]
-        self.alert_group_slack_service.publish_message_to_alert_group_thread(
-            alert_group, attachments=attachments, text=text
-        )
-
-
 class ResolveGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
     REQUIRED_PERMISSIONS = [RBACPermission.Permissions.ALERT_GROUPS_WRITE]
 
@@ -630,7 +588,8 @@ class ResolveGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         ResolutionNoteModalStep = scenario_step.ScenarioStep.get_step("resolution_note", "ResolutionNoteModalStep")
 
@@ -654,7 +613,7 @@ class ResolveGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
                 )
                 return
 
-            alert_group.resolve_by_user(self.user, action_source=ActionSource.SLACK)
+            alert_group.resolve_by_user_or_backsync(self.user, action_source=ActionSource.SLACK)
 
     def process_signal(self, log_record: AlertGroupLogRecord) -> None:
         alert_group = log_record.alert_group
@@ -671,14 +630,15 @@ class UnResolveGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
             self.open_unauthorized_warning(payload)
             return
 
-        alert_group.un_resolve_by_user(self.user, action_source=ActionSource.SLACK)
+        alert_group.un_resolve_by_user_or_backsync(self.user, action_source=ActionSource.SLACK)
 
     def process_signal(self, log_record: AlertGroupLogRecord) -> None:
         self.alert_group_slack_service.update_alert_group_slack_message(log_record.alert_group)
@@ -691,14 +651,15 @@ class AcknowledgeGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
             self.open_unauthorized_warning(payload)
             return
 
-        alert_group.acknowledge_by_user(self.user, action_source=ActionSource.SLACK)
+        alert_group.acknowledge_by_user_or_backsync(self.user, action_source=ActionSource.SLACK)
 
     def process_signal(self, log_record: AlertGroupLogRecord) -> None:
         self.alert_group_slack_service.update_alert_group_slack_message(log_record.alert_group)
@@ -711,14 +672,15 @@ class UnAcknowledgeGroupStep(AlertGroupActionsMixin, scenario_step.ScenarioStep)
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         alert_group = self.get_alert_group(slack_team_identity, payload)
         if not self.is_authorized(alert_group):
             self.open_unauthorized_warning(payload)
             return
 
-        alert_group.un_acknowledge_by_user(self.user, action_source=ActionSource.SLACK)
+        alert_group.un_acknowledge_by_user_or_backsync(self.user, action_source=ActionSource.SLACK)
 
     def process_signal(self, log_record: AlertGroupLogRecord) -> None:
         from apps.alerts.models import AlertGroupLogRecord
@@ -772,12 +734,19 @@ class AcknowledgeConfirmationStep(AcknowledgeGroupStep):
         self,
         slack_user_identity: "SlackUserIdentity",
         slack_team_identity: "SlackTeamIdentity",
-        payload: EventPayload,
+        payload: "EventPayload",
+        predefined_org: typing.Optional["Organization"] = None,
     ) -> None:
         from apps.alerts.models import AlertGroup
 
-        alert_group_id = payload["actions"][0]["value"].split("_")[1]
-        alert_group = AlertGroup.objects.get(pk=alert_group_id)
+        value = payload["actions"][0]["value"]
+        try:
+            alert_group_pk = json.loads(value)["alert_group_pk"]
+        except json.JSONDecodeError:
+            # Deprecated and kept for backward compatibility (so older Slack messages can still be processed)
+            alert_group_pk = value.split("_")[1]
+
+        alert_group = AlertGroup.objects.get(pk=alert_group_pk)
         channel = payload["channel"]["id"]
         message_ts = payload["message_ts"]
 
@@ -835,10 +804,7 @@ class AcknowledgeConfirmationStep(AcknowledgeGroupStep):
                             "text": "Confirm",
                             "type": "button",
                             "style": "primary",
-                            "value": scenario_step.ScenarioStep.get_step(
-                                "distribute_alerts", "AcknowledgeConfirmationStep"
-                            ).routing_uid()
-                            + ("_" + str(alert_group.pk)),
+                            "value": make_value({"alert_group_pk": alert_group.pk}, alert_group.channel.organization),
                         },
                     ],
                 }
@@ -912,123 +878,6 @@ class DeleteGroupStep(scenario_step.ScenarioStep):
             except SlackAPIError:
                 pass
             message.delete()
-
-
-class UpdateLogReportMessageStep(scenario_step.ScenarioStep):
-    def process_signal(self, alert_group: AlertGroup) -> None:
-        if alert_group.skip_escalation_in_slack or alert_group.channel.is_rate_limited_in_slack:
-            return
-
-        self.update_log_message(alert_group)
-
-    def post_log_message(self, alert_group: AlertGroup) -> None:
-        slack_message = alert_group.slack_message
-        if slack_message is None:
-            logger.info(f"Cannot post log message for alert_group {alert_group.pk} because SlackMessage doesn't exist")
-            return None
-
-        slack_log_message = alert_group.slack_log_message
-
-        if slack_log_message is None:
-            logger.debug(f"Start posting new log message for alert_group {alert_group.pk}")
-            try:
-                result = self._slack_client.chat_postMessage(
-                    channel=slack_message.channel_id,
-                    thread_ts=slack_message.slack_id,
-                    text="Building escalation plan... :thinking_face:",
-                )
-            except SlackAPIRatelimitError as e:
-                if not alert_group.channel.is_rate_limited_in_slack:
-                    alert_group.channel.start_send_rate_limit_message_task(e.retry_after)
-                    logger.info(
-                        f"Log message has not been posted for alert_group {alert_group.pk} due to slack rate limit."
-                    )
-            except (
-                SlackAPITokenError,
-                SlackAPIChannelNotFoundError,
-                SlackAPIInvalidAuthError,
-                SlackAPIChannelArchivedError,
-            ):
-                pass
-            else:
-                logger.debug(f"Create new slack_log_message for alert_group {alert_group.pk}")
-                slack_log_message = alert_group.slack_messages.create(
-                    slack_id=result["ts"],
-                    organization=self.organization,
-                    _slack_team_identity=self.slack_team_identity,
-                    channel_id=slack_message.channel_id,
-                    last_updated=timezone.now(),
-                )
-
-                alert_group.slack_log_message = slack_log_message
-                alert_group.save(update_fields=["slack_log_message"])
-                logger.debug(
-                    f"Finished post new log message for alert_group {alert_group.pk}, "
-                    f"slack_log_message with pk '{slack_log_message.pk}' was created."
-                )
-        else:
-            self.update_log_message(alert_group)
-
-    def update_log_message(self, alert_group: AlertGroup) -> None:
-        slack_message = alert_group.slack_message
-        if slack_message is None:
-            logger.info(
-                f"Cannot update log message for alert_group {alert_group.pk} because SlackMessage doesn't exist"
-            )
-            return None
-
-        slack_log_message = alert_group.slack_log_message
-
-        if slack_log_message is not None:
-            # prevent too frequent updates
-            if timezone.now() <= slack_log_message.last_updated + timezone.timedelta(seconds=5):
-                return
-
-            attachments = AlertGroupLogSlackRenderer.render_incident_log_report_for_slack(alert_group)
-            logger.debug(
-                f"Update log message for alert_group {alert_group.pk}, slack_log_message {slack_log_message.pk}"
-            )
-            try:
-                self._slack_client.chat_update(
-                    channel=slack_message.channel_id,
-                    text="Alert Group log",
-                    ts=slack_log_message.slack_id,
-                    attachments=attachments,
-                )
-            except SlackAPIRatelimitError as e:
-                if not alert_group.channel.is_rate_limited_in_slack:
-                    alert_group.channel.start_send_rate_limit_message_task(e.retry_after)
-            except SlackAPIMessageNotFoundError:
-                alert_group.slack_log_message = None
-                alert_group.save(update_fields=["slack_log_message"])
-            except (
-                SlackAPITokenError,
-                SlackAPIChannelNotFoundError,
-                SlackAPIChannelArchivedError,
-                SlackAPIChannelInactiveError,
-                SlackAPIInvalidAuthError,
-            ):
-                pass
-            else:
-                slack_log_message.last_updated = timezone.now()
-                slack_log_message.save(update_fields=["last_updated"])
-                logger.debug(
-                    f"Finished update log message for alert_group {alert_group.pk}, "
-                    f"slack_log_message {slack_log_message.pk}"
-                )
-        # check how much time has passed since slack message was created
-        # to prevent eternal loop of restarting update log message task
-        elif timezone.now() <= slack_message.created_at + timezone.timedelta(minutes=5):
-            logger.debug(
-                f"Update log message failed for alert_group {alert_group.pk}: "
-                f"log message does not exist yet. Restarting post_or_update_log_report_message_task..."
-            )
-            post_or_update_log_report_message_task.apply_async(
-                (alert_group.pk, self.slack_team_identity.pk, True),
-                countdown=3,
-            )
-        else:
-            logger.debug(f"Update log message failed for alert_group {alert_group.pk}: " f"log message does not exist.")
 
 
 STEPS_ROUTING: ScenarioRoute.RoutingSteps = [
@@ -1156,11 +1005,5 @@ STEPS_ROUTING: ScenarioRoute.RoutingSteps = [
         "action_type": InteractiveMessageActionType.BUTTON,
         "action_name": StopInvitationProcess.routing_uid(),
         "step": StopInvitationProcess,
-    },
-    {
-        "payload_type": PayloadType.INTERACTIVE_MESSAGE,
-        "action_type": InteractiveMessageActionType.BUTTON,
-        "action_name": CustomButtonProcessStep.routing_uid(),
-        "step": CustomButtonProcessStep,
     },
 ]

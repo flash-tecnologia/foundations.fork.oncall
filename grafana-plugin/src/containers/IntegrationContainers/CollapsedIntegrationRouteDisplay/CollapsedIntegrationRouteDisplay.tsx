@@ -1,25 +1,26 @@
 import React, { useMemo, useState } from 'react';
 
-import { ConfirmModal, HorizontalGroup, Icon, IconName } from '@grafana/ui';
+import { ConfirmModal, Icon, IconName, Stack } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { observer } from 'mobx-react';
 
-import IntegrationBlock from 'components/Integrations/IntegrationBlock';
-import PluginLink from 'components/PluginLink/PluginLink';
-import Text from 'components/Text/Text';
-import TooltipBadge from 'components/TooltipBadge/TooltipBadge';
+import { IntegrationBlock } from 'components/Integrations/IntegrationBlock';
+import { PluginLink } from 'components/PluginLink/PluginLink';
+import { Text } from 'components/Text/Text';
 import styles from 'containers/IntegrationContainers/CollapsedIntegrationRouteDisplay/CollapsedIntegrationRouteDisplay.module.scss';
 import { RouteButtonsDisplay } from 'containers/IntegrationContainers/ExpandedIntegrationRouteDisplay/ExpandedIntegrationRouteDisplay';
-import { AlertReceiveChannel } from 'models/alert_receive_channel/alert_receive_channel.types';
-import { ChannelFilter } from 'models/channel_filter';
-import CommonIntegrationHelper from 'pages/integration/CommonIntegration.helper';
-import IntegrationHelper from 'pages/integration/Integration.helper';
+import { RouteHeading } from 'containers/IntegrationContainers/RouteHeading';
+import { ChannelFilter } from 'models/channel_filter/channel_filter.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { CommonIntegrationHelper } from 'pages/integration/CommonIntegration.helper';
+import { IntegrationHelper } from 'pages/integration/Integration.helper';
 import { useStore } from 'state/useStore';
+import { StackSize } from 'utils/consts';
 
 const cx = cn.bind(styles);
 
 interface CollapsedIntegrationRouteDisplayProps {
-  alertReceiveChannelId: AlertReceiveChannel['id'];
+  alertReceiveChannelId: ApiSchemas['AlertReceiveChannel']['id'];
   channelFilterId: ChannelFilter['id'];
   routeIndex: number;
   toggle: () => void;
@@ -29,7 +30,7 @@ interface CollapsedIntegrationRouteDisplayProps {
   onItemMove: () => void;
 }
 
-const CollapsedIntegrationRouteDisplay: React.FC<CollapsedIntegrationRouteDisplayProps> = observer(
+export const CollapsedIntegrationRouteDisplay: React.FC<CollapsedIntegrationRouteDisplayProps> = observer(
   ({
     channelFilterId,
     alertReceiveChannelId,
@@ -70,34 +71,13 @@ const CollapsedIntegrationRouteDisplay: React.FC<CollapsedIntegrationRouteDispla
           toggle={toggle}
           heading={
             <div className={cx('heading-container')}>
-              <div className={cx('heading-container__item', 'heading-container__item--large')}>
-                <TooltipBadge
-                  borderType="success"
-                  text={routeWording}
-                  tooltipTitle={CommonIntegrationHelper.getRouteConditionTooltipWording(
-                    alertReceiveChannelStore.channelFilterIds[alertReceiveChannelId],
-                    routeIndex
-                  )}
-                  className={cx('u-margin-right-xs')}
-                  tooltipContent={undefined}
-                />
-                {routeWording === 'Default' && <Text type="secondary">Unmatched alerts routed to default route</Text>}
-                {routeWording !== 'Default' &&
-                  (channelFilter.filtering_term ? (
-                    <Text type="primary" className={cx('heading-container__text')}>
-                      {channelFilter.filtering_term}
-                    </Text>
-                  ) : (
-                    <>
-                      <div className={cx('icon-exclamation')}>
-                        <Icon name="exclamation-triangle" />
-                      </div>
-                      <Text type="primary" className={cx('heading-container__text')}>
-                        Routing template not set
-                      </Text>
-                    </>
-                  ))}
-              </div>
+              <RouteHeading
+                className={cx('heading-container__item', 'heading-container__item--large')}
+                routeWording={routeWording}
+                routeIndex={routeIndex}
+                channelFilter={channelFilter}
+                channelFilterIds={alertReceiveChannelStore.channelFilterIds[alertReceiveChannelId]}
+              />
 
               <div className={cx('heading-container__item')}>
                 <RouteButtonsDisplay
@@ -116,7 +96,7 @@ const CollapsedIntegrationRouteDisplay: React.FC<CollapsedIntegrationRouteDispla
               <div className={cx('collapsedRoute__container')}>
                 {chatOpsAvailableChannels.length > 0 && (
                   <div className={cx('collapsedRoute__item')}>
-                    <HorizontalGroup spacing="xs">
+                    <Stack gap={StackSize.xs}>
                       <Text type="secondary">Publish to ChatOps</Text>
 
                       {chatOpsAvailableChannels.map(
@@ -130,7 +110,7 @@ const CollapsedIntegrationRouteDisplay: React.FC<CollapsedIntegrationRouteDispla
                           </div>
                         )
                       )}
-                    </HorizontalGroup>
+                    </Stack>
                   </div>
                 )}
 
@@ -195,5 +175,3 @@ const CollapsedIntegrationRouteDisplay: React.FC<CollapsedIntegrationRouteDispla
     }
   }
 );
-
-export default CollapsedIntegrationRouteDisplay;

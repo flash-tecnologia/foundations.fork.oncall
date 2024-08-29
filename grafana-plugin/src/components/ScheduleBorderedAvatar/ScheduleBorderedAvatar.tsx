@@ -1,33 +1,32 @@
-import React from 'react';
+import React, { ReactElement } from 'react';
 
-import cn from 'classnames/bind';
-
-import styles from './ScheduleBorderedAvatar.module.scss';
-
-const cx = cn.bind(styles);
+import { css } from '@emotion/css';
+import { useStyles2 } from '@grafana/ui';
 
 interface ScheduleBorderedAvatarProps {
   colors: string[];
   width: number;
   height: number;
-  renderAvatar: () => JSX.Element;
-  renderIcon: () => JSX.Element;
+  renderAvatar: () => ReactElement;
+  renderIcon: () => ReactElement;
 }
 
-export default function ScheduleBorderedAvatar({
+export const ScheduleBorderedAvatar = function ({
   colors,
   renderAvatar,
   renderIcon,
   width,
   height,
 }: ScheduleBorderedAvatarProps) {
-  return <div className={cx('root')}>{renderSVG()}</div>;
+  const styles = useStyles2(getStyles);
+
+  return <div className={styles.root}>{renderSVG()}</div>;
 
   function renderAvatarIcon() {
     return (
       <>
-        <div className={cx('avatar')}>{renderAvatar()}</div>
-        <div className={cx('icon')}>{renderIcon()}</div>
+        <div className={styles.avatar}>{renderAvatar()}</div>
+        <div className={styles.icon}>{renderIcon()}</div>
       </>
     );
   }
@@ -74,4 +73,25 @@ export default function ScheduleBorderedAvatar({
       return <path key={colorIndex} d={d} stroke={colors[colorIndex]} />;
     });
   }
-}
+};
+
+const getStyles = () => {
+  return {
+    root: css`
+      position: relative;
+      z-index: 1;
+    `,
+
+    avatar: css`
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: -1;
+    `,
+
+    icon: css`
+      position: relative;
+      top: -8px;
+    `,
+  };
+};

@@ -1,6 +1,6 @@
 import type { Locator, Page } from '@playwright/test';
 
-import { randomUUID } from 'crypto';
+import { randomInt, randomUUID } from 'crypto';
 
 type SelectorType = 'gSelect' | 'grafanaSelect';
 type SelectDropdownValueArgs = {
@@ -22,9 +22,10 @@ type SelectDropdownValueArgs = {
 
 type ClickButtonArgs = {
   page: Page;
-  buttonText: string;
+  buttonText: string | RegExp;
   // if provided, use this Locator as the root of our search for the button
   startingLocator?: Locator;
+  exact?: boolean;
 };
 
 export const fillInInput = (page: Page, selector: string, value: string) => page.fill(selector, value);
@@ -34,9 +35,9 @@ export const fillInInputByPlaceholderValue = (page: Page, placeholderValue: stri
 
 export const getInputByName = (page: Page, name: string): Locator => page.locator(`input[name="${name}"]`);
 
-export const clickButton = async ({ page, buttonText, startingLocator }: ClickButtonArgs): Promise<void> => {
+export const clickButton = async ({ page, buttonText, startingLocator, exact }: ClickButtonArgs): Promise<void> => {
   const baseLocator = startingLocator || page;
-  await baseLocator.getByRole('button', { name: buttonText, disabled: false }).click();
+  await baseLocator.getByRole('button', { name: buttonText, disabled: false, exact }).click();
 };
 
 /**
@@ -97,6 +98,16 @@ export const selectDropdownValue = async (args: SelectDropdownValueArgs): Promis
 
 export const generateRandomValue = (): string => randomUUID();
 
+export const generateRandomValidLabel = (length = 10) => {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    const randomIndex = randomInt(0, characters.length);
+    result += characters[randomIndex];
+  }
+  return result;
+};
+
 /**
  * wait for the options to appear
  *
@@ -113,3 +124,6 @@ export const selectValuePickerValue = async (
       `div[class*="grafana-select-menu"] >> ${textMatchSelector(optionExactMatch, valuePickerText)}`
     )
   ).click();
+
+export const openDropdown = async ({ page, text }: { page: Page; text: string | RegExp }) =>
+  page.locator('div').filter({ hasText: text }).nth(1).click();

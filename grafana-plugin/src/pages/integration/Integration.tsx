@@ -1,80 +1,74 @@
-import React, { useState } from 'react';
+import React from 'react';
 
+import { GrafanaTheme2 } from '@grafana/data';
 import { LabelTag } from '@grafana/labels';
-import {
-  Button,
-  HorizontalGroup,
-  VerticalGroup,
-  Icon,
-  LoadingPlaceholder,
-  CascaderOption,
-  IconButton,
-  ConfirmModal,
-  Drawer,
-  Alert,
-} from '@grafana/ui';
+import { Button, Stack, LoadingPlaceholder, IconButton, Drawer, Alert } from '@grafana/ui';
 import cn from 'classnames/bind';
 import { get } from 'lodash-es';
 import { observer } from 'mobx-react';
-import CopyToClipboard from 'react-copy-to-clipboard';
+import moment from 'moment-timezone';
 import Emoji from 'react-emoji-render';
-import { RouteComponentProps, useHistory, withRouter } from 'react-router-dom';
 
-import { templateForEdit } from 'components/AlertTemplates/AlertTemplatesForm.config';
+import { getTemplatesForEdit } from 'components/AlertTemplates/AlertTemplatesForm.config';
 import { TemplateForEdit } from 'components/AlertTemplates/CommonAlertTemplatesForm.config';
-import HamburgerMenu from 'components/HamburgerMenu/HamburgerMenu';
-import IntegrationCollapsibleTreeView, {
-  IntegrationCollapsibleItem,
-} from 'components/IntegrationCollapsibleTreeView/IntegrationCollapsibleTreeView';
-import IntegrationContactPoint from 'components/IntegrationContactPoint/IntegrationContactPoint';
-import IntegrationHowToConnect from 'components/IntegrationHowToConnect/IntegrationHowToConnect';
-import IntegrationLogo from 'components/IntegrationLogo/IntegrationLogo';
-import IntegrationSendDemoAlertModal from 'components/IntegrationSendDemoAlertModal/IntegrationSendDemoAlertModal';
-import IntegrationBlock from 'components/Integrations/IntegrationBlock';
-import PageErrorHandlingWrapper, { PageBaseState } from 'components/PageErrorHandlingWrapper/PageErrorHandlingWrapper';
+import { CollapsibleTreeView, CollapsibleItem } from 'components/CollapsibleTreeView/CollapsibleTreeView';
+import { IntegrationContactPoint } from 'components/IntegrationContactPoint/IntegrationContactPoint';
+import { IntegrationHowToConnect } from 'components/IntegrationHowToConnect/IntegrationHowToConnect';
+import { IntegrationLogoWithTitle } from 'components/IntegrationLogo/IntegrationLogoWithTitle';
+import { IntegrationBlock } from 'components/Integrations/IntegrationBlock';
+import { IntegrationTag } from 'components/Integrations/IntegrationTag';
+import { PageErrorHandlingWrapper, PageBaseState } from 'components/PageErrorHandlingWrapper/PageErrorHandlingWrapper';
 import { initErrorDataState } from 'components/PageErrorHandlingWrapper/PageErrorHandlingWrapper.helpers';
-import PluginLink from 'components/PluginLink/PluginLink';
-import RenderConditionally from 'components/RenderConditionally/RenderConditionally';
-import Tag from 'components/Tag/Tag';
-import Text from 'components/Text/Text';
-import TooltipBadge from 'components/TooltipBadge/TooltipBadge';
-import { WithContextMenu } from 'components/WithContextMenu/WithContextMenu';
-import EditRegexpRouteTemplateModal from 'containers/EditRegexpRouteTemplateModal/EditRegexpRouteTemplateModal';
-import CollapsedIntegrationRouteDisplay from 'containers/IntegrationContainers/CollapsedIntegrationRouteDisplay/CollapsedIntegrationRouteDisplay';
-import ExpandedIntegrationRouteDisplay from 'containers/IntegrationContainers/ExpandedIntegrationRouteDisplay/ExpandedIntegrationRouteDisplay';
-import IntegrationHeartbeatForm from 'containers/IntegrationContainers/IntegrationHeartbeatForm/IntegrationHeartbeatForm';
-import IntegrationTemplateList from 'containers/IntegrationContainers/IntegrationTemplatesList';
-import IntegrationForm from 'containers/IntegrationForm/IntegrationForm';
-import IntegrationLabelsForm from 'containers/IntegrationLabelsForm/IntegrationLabelsForm';
-import IntegrationTemplate from 'containers/IntegrationTemplate/IntegrationTemplate';
-import MaintenanceForm from 'containers/MaintenanceForm/MaintenanceForm';
-import TeamName from 'containers/TeamName/TeamName';
-import UserDisplayWithAvatar from 'containers/UserDisplay/UserDisplayWithAvatar';
+import { PluginLink } from 'components/PluginLink/PluginLink';
+import { Tabs } from 'components/Tabs/Tabs';
+import { Text } from 'components/Text/Text';
+import { TooltipBadge } from 'components/TooltipBadge/TooltipBadge';
+import { EditRegexpRouteTemplateModal } from 'containers/EditRegexpRouteTemplateModal/EditRegexpRouteTemplateModal';
+import { CollapsedIntegrationRouteDisplay } from 'containers/IntegrationContainers/CollapsedIntegrationRouteDisplay/CollapsedIntegrationRouteDisplay';
+import { ExpandedIntegrationRouteDisplay } from 'containers/IntegrationContainers/ExpandedIntegrationRouteDisplay/ExpandedIntegrationRouteDisplay';
+import { IntegrationTemplateList } from 'containers/IntegrationContainers/IntegrationTemplatesList';
+import { IntegrationTemplate } from 'containers/IntegrationTemplate/IntegrationTemplate';
+import { TeamName } from 'containers/TeamName/TeamName';
+import { UserDisplayWithAvatar } from 'containers/UserDisplay/UserDisplayWithAvatar';
 import { WithPermissionControlTooltip } from 'containers/WithPermissionControl/WithPermissionControlTooltip';
-import { HeartIcon, HeartRedIcon } from 'icons';
-import {
-  AlertReceiveChannel,
-  AlertReceiveChannelCounters,
-} from 'models/alert_receive_channel/alert_receive_channel.types';
-import { AlertTemplatesDTO } from 'models/alert_templates';
-import { ChannelFilter } from 'models/channel_filter';
-import { INTEGRATION_TEMPLATES_LIST } from 'pages/integration/Integration.config';
-import IntegrationHelper from 'pages/integration/Integration.helper';
+import { HeartIcon, HeartRedIcon } from 'icons/Icons';
+import { AlertReceiveChannelHelper } from 'models/alert_receive_channel/alert_receive_channel.helpers';
+import { AlertReceiveChannelCounters } from 'models/alert_receive_channel/alert_receive_channel.types';
+import { AlertTemplatesDTO } from 'models/alert_templates/alert_templates';
+import { ChannelFilter } from 'models/channel_filter/channel_filter.types';
+import { ApiSchemas } from 'network/oncall-api/api.types';
+import { IntegrationHelper, getIsBidirectionalIntegration } from 'pages/integration/Integration.helper';
 import styles from 'pages/integration/Integration.module.scss';
 import { AppFeature } from 'state/features';
-import { PageProps, SelectOption, WithStoreProps } from 'state/types';
+import { PageProps, SelectOption, WithDrawerConfig, WithStoreProps } from 'state/types';
 import { useStore } from 'state/useStore';
 import { withMobXProviderContext } from 'state/withStore';
-import { openNotification, openErrorNotification } from 'utils';
-import { getVar } from 'utils/DOM';
-import LocationHelper from 'utils/LocationHelper';
-import { UserActions } from 'utils/authorization';
-import { PLUGIN_ROOT } from 'utils/consts';
-import sanitize from 'utils/sanitize';
+import { LocationHelper } from 'utils/LocationHelper';
+import { UserActions } from 'utils/authorization/authorization';
+import { INTEGRATION_SERVICENOW, PLUGIN_ROOT, StackSize } from 'utils/consts';
+import { PropsWithRouter, withDrawer, withRouter } from 'utils/hoc';
+import { getItem, setItem } from 'utils/localStorage';
+import { sanitize } from 'utils/sanitize';
+import { openNotification, openErrorNotification } from 'utils/utils';
+
+import { IntegrationActions } from './IntegrationActions';
+import { OutgoingTab } from './OutgoingTab/OutgoingTab';
 
 const cx = cn.bind(styles);
 
-interface IntegrationProps extends WithStoreProps, PageProps, RouteComponentProps<{ id: string }> {}
+export type IntegrationDrawerKey = typeof INTEGRATION_SERVICENOW | 'completeConfig';
+
+interface RouteProps {
+  id: string;
+}
+
+interface IntegrationProps
+  extends WithDrawerConfig<IntegrationDrawerKey>,
+    WithStoreProps,
+    PageProps,
+    PropsWithRouter<RouteProps> {
+  theme: GrafanaTheme2;
+}
 
 interface IntegrationState extends PageBaseState {
   isLoading: boolean;
@@ -91,7 +85,7 @@ interface IntegrationState extends PageBaseState {
 const NEW_ROUTE_DEFAULT = '';
 
 @observer
-class Integration extends React.Component<IntegrationProps, IntegrationState> {
+class _IntegrationPage extends React.Component<IntegrationProps, IntegrationState> {
   constructor(props: IntegrationProps) {
     super(props);
 
@@ -129,12 +123,14 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
       channelFilterIdForEdit,
       isTemplateSettingsOpen,
     } = this.state;
+
     const {
       store,
       query,
-      match: {
+      router: {
         params: { id },
       },
+      drawerConfig,
     } = this.props;
 
     const { alertReceiveChannelStore } = store;
@@ -152,10 +148,43 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
       );
     }
 
-    const integration = alertReceiveChannelStore.getIntegration(alertReceiveChannel);
+    const integration = AlertReceiveChannelHelper.getIntegrationSelectOption(
+      alertReceiveChannelStore,
+      alertReceiveChannel
+    );
     const alertReceiveChannelCounter = alertReceiveChannelStore.counters[id];
     const isLegacyIntegration = integration && (integration?.value as string).toLowerCase().startsWith('legacy_');
     const contactPoints = alertReceiveChannelStore.connectedContactPoints?.[alertReceiveChannel.id];
+
+    const incomingPart = (
+      <>
+        <CollapsibleTreeView configElements={this.getConfigForTreeComponent(id, templates) as any} />
+        {isEditTemplateModalOpen && (
+          <IntegrationTemplate
+            id={id}
+            onHide={() => {
+              this.setState({
+                isEditTemplateModalOpen: undefined,
+              });
+              if (selectedTemplate?.name !== 'route_template') {
+                this.setState({ isTemplateSettingsOpen: true });
+              }
+              LocationHelper.update({ template: undefined, routeId: undefined }, 'partial');
+            }}
+            channelFilterId={channelFilterIdForEdit}
+            onUpdateTemplates={this.onUpdateTemplatesCallback}
+            onUpdateRoute={(values, channelFilterId) => this.onUpdateRoutesCallback(values, channelFilterId, 1)}
+            template={selectedTemplate}
+            templateBody={
+              selectedTemplate?.name === 'route_template'
+                ? this.getRoutingTemplate(channelFilterIdForEdit)
+                : templates[selectedTemplate?.name]
+            }
+            templates={templates}
+          />
+        )}
+      </>
+    );
 
     return (
       <PageErrorHandlingWrapper errorData={errorData} objectName="integration" pageName="Integration">
@@ -191,11 +220,13 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
                 alertReceiveChannel={alertReceiveChannel}
                 changeIsTemplateSettingsOpen={() => this.setState({ isTemplateSettingsOpen: true })}
                 isLegacyIntegration={isLegacyIntegration}
+                drawerConfig={drawerConfig}
               />
             </div>
 
             <div className={cx('integration__subheading-container')}>
               {this.renderDeprecatedHeaderMaybe(integration, isLegacyIntegration)}
+              {this.renderAlertmanagerV2MigrationHeaderMaybe(alertReceiveChannel)}
 
               {this.renderDescriptionMaybe(alertReceiveChannel)}
 
@@ -225,32 +256,24 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
               )}
             </div>
 
-            <IntegrationCollapsibleTreeView configElements={this.getConfigForTreeComponent(id, templates) as any} />
-
-            {isEditTemplateModalOpen && (
-              <IntegrationTemplate
-                id={id}
-                onHide={() => {
-                  this.setState({
-                    isEditTemplateModalOpen: undefined,
-                  });
-                  if (selectedTemplate?.name !== 'route_template') {
-                    this.setState({ isTemplateSettingsOpen: true });
-                  }
-                  LocationHelper.update({ template: undefined, routeId: undefined }, 'partial');
-                }}
-                channelFilterId={channelFilterIdForEdit}
-                onUpdateTemplates={this.onUpdateTemplatesCallback}
-                onUpdateRoute={this.onUpdateRoutesCallback}
-                template={selectedTemplate}
-                templateBody={
-                  selectedTemplate?.name === 'route_template'
-                    ? this.getRoutingTemplate(channelFilterIdForEdit)
-                    : templates[selectedTemplate?.name]
-                }
-                templates={templates}
+            {getIsBidirectionalIntegration(alertReceiveChannel) ? (
+              <Tabs
+                tabs={[
+                  { label: 'Incoming', content: incomingPart },
+                  {
+                    label: 'Outgoing',
+                    content: (
+                      <OutgoingTab
+                        openSnowConfigurationDrawer={() => drawerConfig.openDrawer(INTEGRATION_SERVICENOW)}
+                      />
+                    ),
+                  },
+                ]}
               />
+            ) : (
+              <>{incomingPart}</>
             )}
+
             {isEditRegexpRouteTemplateModalOpen && (
               <EditRegexpRouteTemplateModal
                 alertReceiveChannelId={id}
@@ -278,7 +301,7 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
           severity="warning"
           title={
             (
-              <VerticalGroup>
+              <Stack direction="column">
                 <Text type="secondary">
                   We are introducing a new {getDisplayName()} integration. The existing integration is marked as Legacy
                   and will be migrated on 1st February 2024.
@@ -297,7 +320,7 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
                   </a>{' '}
                   for more information.
                 </Text>
-              </VerticalGroup>
+              </Stack>
             ) as any
           }
         />
@@ -313,7 +336,66 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
     }
   }
 
-  renderDescriptionMaybe(alertReceiveChannel: AlertReceiveChannel) {
+  renderAlertmanagerV2MigrationHeaderMaybe(alertReceiveChannel: ApiSchemas['AlertReceiveChannel']) {
+    if (!alertReceiveChannel.alertmanager_v2_migrated_at) {
+      return null;
+    }
+
+    const alertID = `alertmanager_v2_alert_hidden_${alertReceiveChannel.id}`;
+    if (getItem(alertID)) {
+      return null;
+    }
+    const onAlertRemove = () => {
+      setItem(alertID, true);
+      this.forceUpdate();
+    };
+
+    const migratedAt = moment(alertReceiveChannel.alertmanager_v2_migrated_at).toString();
+    const docsURL = `https://grafana.com/docs/oncall/latest/integrations/${alertReceiveChannel.integration.replace(
+      '_',
+      '-'
+    )}`;
+
+    return (
+      <div className="u-padding-top-md">
+        <Alert
+          severity="warning"
+          onRemove={onAlertRemove}
+          title={
+            (
+              <Stack direction="column">
+                <Text type="secondary">
+                  This legacy integration was automatically migrated at {migratedAt}. It now relies on Alertmanager's
+                  grouping and autoresolution mechanism.
+                </Text>
+                <Text type="secondary">Here are the steps you need to take to ensure a smooth transition:</Text>
+                <Text type="secondary">
+                  1. Check and adjust integration templates, as they were dropped back to default values during the
+                  migration.
+                </Text>
+                <Text type="secondary">
+                  2. Check and adjust integration routes so that they match the new payload shape.
+                </Text>
+                <Text type="secondary">
+                  3. Check and adjust outgoing webhooks that use alerts from this integration so that they match the new
+                  payload shape.
+                </Text>
+                <Text type="secondary">
+                  Refer to{' '}
+                  <a href={docsURL} target="_blank" rel="noreferrer">
+                    <Text type="link">the docs</Text>
+                  </a>{' '}
+                  for more information.
+                </Text>
+              </Stack>
+            ) as any
+          }
+        />
+      </div>
+    );
+  }
+
+  renderDescriptionMaybe(alertReceiveChannel: ApiSchemas['AlertReceiveChannel']) {
     if (!alertReceiveChannel.description_short) {
       return null;
     }
@@ -325,7 +407,7 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
     );
   }
 
-  renderContactPointsWarningMaybe(alertReceiveChannel: AlertReceiveChannel) {
+  renderContactPointsWarningMaybe(alertReceiveChannel: ApiSchemas['AlertReceiveChannel']) {
     if (IntegrationHelper.isSpecificIntegration(alertReceiveChannel, 'grafana_alerting')) {
       return (
         <div className={cx('u-padding-top-md')}>
@@ -362,13 +444,14 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
     const isAlerting = IntegrationHelper.isSpecificIntegration(alertReceiveChannel, 'grafana_alerting');
     const isLegacyAlerting = IntegrationHelper.isSpecificIntegration(alertReceiveChannel, 'legacy_grafana_alerting');
 
-    return [
+    const configs: Array<CollapsibleItem | CollapsibleItem[]> = [
       (isAlerting || isLegacyAlerting) && {
         isHidden: isLegacyAlerting || contactPoints === null || contactPoints === undefined,
         isCollapsible: false,
         customIcon: 'grafana',
         canHoverIcon: false,
         collapsedView: null,
+        startingElemPosition: '50%',
         expandedView: () => <IntegrationContactPoint id={id} />,
       },
       {
@@ -376,6 +459,7 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
         customIcon: 'plug',
         canHoverIcon: false,
         collapsedView: null,
+        startingElemPosition: '50%',
         expandedView: () => <IntegrationHowToConnect id={id} />,
       },
       {
@@ -383,20 +467,13 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
         isExpanded: false,
         isCollapsible: false,
         canHoverIcon: false,
+        startingElemPosition: '50%',
         expandedView: () => (
           <IntegrationBlock
             noContent
             heading={
               <div className={cx('templates__outer-container')}>
-                <Tag
-                  color={getVar('--tag-secondary-transparent')}
-                  border={getVar('--border-weak')}
-                  className={cx('tag')}
-                >
-                  <Text type="primary" size="small" className={cx('radius')}>
-                    Templates
-                  </Text>
-                </Tag>
+                <IntegrationTag>Templates</IntegrationTag>
 
                 <div className={cx('templates__content')}>
                   <div className={cx('templates__container')}>
@@ -420,7 +497,7 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
                         Autoresolve:
                       </Text>
                       <Text type="primary">
-                        {IntegrationHelper.truncateLine(templates['resolve_condition_template'] || 'disabled')}
+                        {IntegrationHelper.truncateLine(templates?.['resolve_condition_template'] || 'disabled')}
                       </Text>
                     </div>
 
@@ -453,30 +530,35 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
         collapsedView: undefined,
       },
       {
-        customIcon: 'code-branch',
+        customIcon: 'plus',
         isCollapsible: false,
         collapsedView: null,
         canHoverIcon: false,
+        startingElemPosition: '40px',
         expandedView: () => (
           <div className={cx('routesSection')}>
-            <VerticalGroup spacing="md">
+            <Stack direction="column" gap={StackSize.md}>
               <Text type={'primary'} className={cx('routesSection__heading')}>
                 Routes
               </Text>
-              <HorizontalGroup>
+              <Stack>
                 <WithPermissionControlTooltip userAction={UserActions.IntegrationsWrite}>
                   <Button variant={'primary'} className={cx('routesSection__add')} onClick={this.handleAddNewRoute}>
                     Add route
                   </Button>
                 </WithPermissionControlTooltip>
-                {this.state.isAddingRoute && <LoadingPlaceholder text="Loading..." />}
-              </HorizontalGroup>
-            </VerticalGroup>
+                {this.state.isAddingRoute && (
+                  <LoadingPlaceholder text="Loading..." className={cx('loadingPlaceholder')} />
+                )}
+              </Stack>
+            </Stack>
           </div>
         ),
       },
-      this.renderRoutesFn(),
-    ].filter((opt) => opt);
+      this.renderRoutesFn() as CollapsibleItem[],
+    ];
+
+    return configs.filter(Boolean);
   }
 
   getRoutingTemplate = (channelFilterId: ChannelFilter['id']) => {
@@ -488,49 +570,47 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
   };
 
   handleAddNewRoute = () => {
-    const { alertReceiveChannelStore } = this.props.store;
     const {
-      params: { id },
-    } = this.props.match;
+      store: { alertReceiveChannelStore },
+      router: {
+        params: { id },
+      },
+    } = this.props;
 
     this.setState(
       {
         isAddingRoute: true,
       },
-      () => {
-        alertReceiveChannelStore
-          .createChannelFilter({
+      async () => {
+        try {
+          const channelFilter: ChannelFilter = await AlertReceiveChannelHelper.createChannelFilter({
             alert_receive_channel: id,
             filtering_term: NEW_ROUTE_DEFAULT,
             filtering_term_type: 1, // non-regex
-          })
-          .then(async (channelFilter: ChannelFilter) => {
-            await alertReceiveChannelStore.updateChannelFilters(id);
-
-            this.setState(
-              (prevState) => ({
-                isAddingRoute: false,
-                openRoutes: prevState.openRoutes.concat(channelFilter.id),
-              }),
-              () => this.forceUpdate()
-            );
-
-            openNotification('A new route has been added');
-          })
-          .catch((err) => {
-            const errors = get(err, 'response.data');
-            if (errors?.non_field_errors) {
-              openErrorNotification(errors.non_field_errors);
-            }
           });
+          await alertReceiveChannelStore.fetchChannelFilters(id);
+          this.setState(
+            (prevState) => ({
+              isAddingRoute: false,
+              openRoutes: prevState.openRoutes.concat(channelFilter.id),
+            }),
+            () => this.forceUpdate()
+          );
+          openNotification('A new route has been added');
+        } catch (err) {
+          const errors = get(err, 'response.data');
+          if (errors?.non_field_errors) {
+            openErrorNotification(errors.non_field_errors);
+          }
+        }
       }
     );
   };
 
-  renderRoutesFn = (): IntegrationCollapsibleItem[] => {
+  renderRoutesFn = (): CollapsibleItem[] => {
     const {
       store: { alertReceiveChannelStore },
-      match: {
+      router: {
         params: { id },
       },
     } = this.props;
@@ -541,7 +621,8 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
     const channelFilterIds = alertReceiveChannelStore.channelFilterIds[id];
 
     const onRouteDelete = async (routeId: string) => {
-      await alertReceiveChannelStore.deleteChannelFilter(routeId).then(() => this.forceUpdate());
+      await alertReceiveChannelStore.deleteChannelFilter(routeId);
+      this.forceUpdate();
       openNotification('Route has been deleted');
     };
 
@@ -550,6 +631,7 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
         ({
           canHoverIcon: true,
           isCollapsible: true,
+          startingElemPosition: '50%',
           isExpanded: openRoutes.indexOf(channelFilterId) > -1,
           onStateChange: (isChecked: boolean) => {
             const newOpenRoutes = [...openRoutes];
@@ -561,6 +643,7 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
           },
           collapsedView: (toggle) => (
             <CollapsedIntegrationRouteDisplay
+              key={`${channelFilterId}_${routeIndex}`} // Key is required
               alertReceiveChannelId={id}
               channelFilterId={channelFilterId}
               routeIndex={routeIndex}
@@ -573,6 +656,7 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
           ),
           expandedView: () => (
             <ExpandedIntegrationRouteDisplay
+              key={`${channelFilterId}_${routeIndex}`} // Key is required
               alertReceiveChannelId={id}
               channelFilterId={channelFilterId}
               routeIndex={routeIndex}
@@ -583,74 +667,73 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
               onRouteDelete={onRouteDelete}
             />
           ),
-        } as IntegrationCollapsibleItem)
-    );
+        } as CollapsibleItem)
+    ) as CollapsibleItem[];
   };
 
   handleEditRegexpRouteTemplate = (channelFilterId) => {
     this.setState({ isEditRegexpRouteTemplateModalOpen: true, channelFilterIdForEdit: channelFilterId });
   };
 
-  onUpdateRoutesCallback = (
+  onUpdateRoutesCallback = async (
     { route_template }: { route_template: string },
     channelFilterId: ChannelFilter['id'],
     filteringTermType?: number
   ) => {
-    const { alertReceiveChannelStore, escalationPolicyStore } = this.props.store;
     const {
-      params: { id },
-    } = this.props.match;
-
-    alertReceiveChannelStore
-      .saveChannelFilter(channelFilterId, {
-        filtering_term: route_template,
-        filtering_term_type: filteringTermType,
-      })
-      .then((channelFilter: ChannelFilter) => {
-        alertReceiveChannelStore.updateChannelFilters(id, true).then(() => {
-          escalationPolicyStore.updateEscalationPolicies(channelFilter.escalation_chain);
-        });
-        this.setState({
-          isEditTemplateModalOpen: undefined,
-        });
-        LocationHelper.update({ template: undefined, routeId: undefined }, 'partial');
-      })
-      .catch((err) => {
-        const errors = get(err, 'response.data');
-        if (errors?.non_field_errors) {
-          openErrorNotification(errors.non_field_errors);
-        }
-      });
-  };
-
-  onUpdateTemplatesCallback = (data) => {
-    const {
-      store,
-      match: {
+      store: { alertReceiveChannelStore, escalationPolicyStore },
+      router: {
         params: { id },
       },
     } = this.props;
 
-    store.alertReceiveChannelStore
-      .saveTemplates(id, data)
-      .then(() => {
-        openNotification('The Alert templates have been updated');
-        this.setState({ isEditTemplateModalOpen: undefined });
-        this.setState({ isTemplateSettingsOpen: true });
-        LocationHelper.update({ template: undefined, routeId: undefined }, 'partial');
-      })
-      .catch((err) => {
-        if (err.response?.data?.length > 0) {
-          openErrorNotification(err.response.data);
-        } else {
-          openErrorNotification('Template is not valid. Please check your template and try again');
-        }
+    try {
+      const channelFilter: ChannelFilter = await alertReceiveChannelStore.saveChannelFilter(channelFilterId, {
+        filtering_term: route_template,
+        filtering_term_type: filteringTermType,
       });
+      await alertReceiveChannelStore.fetchChannelFilters(id, true);
+      escalationPolicyStore.updateEscalationPolicies(channelFilter.escalation_chain);
+      this.setState({
+        isEditTemplateModalOpen: undefined,
+      });
+      LocationHelper.update({ template: undefined, routeId: undefined }, 'partial');
+    } catch (err) {
+      const errors = get(err, 'response.data');
+      if (errors?.non_field_errors) {
+        openErrorNotification(errors.non_field_errors);
+      }
+    }
   };
 
-  getTemplatesList = (): CascaderOption[] => INTEGRATION_TEMPLATES_LIST;
+  onUpdateTemplatesCallback = async (data) => {
+    const {
+      store,
+      router: {
+        params: { id },
+      },
+    } = this.props;
+
+    try {
+      await store.alertReceiveChannelStore.saveTemplates(id, data);
+      openNotification('The Alert templates have been updated');
+      this.setState({ isEditTemplateModalOpen: undefined });
+      this.setState({ isTemplateSettingsOpen: true });
+      LocationHelper.update({ template: undefined, routeId: undefined }, 'partial');
+    } catch (err) {
+      if (err.response?.data?.length > 0) {
+        openErrorNotification(err.response.data);
+      } else {
+        openErrorNotification('Template is not valid. Please check your template and try again');
+      }
+    }
+  };
 
   openEditTemplateModal = (templateName, channelFilterId?: ChannelFilter['id']) => {
+    const { store } = this.props;
+
+    const templateForEdit = getTemplatesForEdit(store.features);
+
     if (templateForEdit[templateName]) {
       this.setState({
         isEditTemplateModalOpen: true,
@@ -665,409 +748,73 @@ class Integration extends React.Component<IntegrationProps, IntegrationState> {
     }
   };
 
-  onRemovalFn = (id: AlertReceiveChannel['id']) => {
+  onRemovalFn = async (id: ApiSchemas['AlertReceiveChannel']['id']) => {
     const {
-      store: { alertReceiveChannelStore },
-      history,
+      router: { navigate },
     } = this.props;
-
-    alertReceiveChannelStore.deleteAlertReceiveChannel(id).then(() => history.push(`${PLUGIN_ROOT}/integrations/`));
+    await AlertReceiveChannelHelper.deleteAlertReceiveChannel(id);
+    navigate(`${PLUGIN_ROOT}/integrations/`);
   };
 
   async loadData() {
     const {
-      store,
-      store: { alertReceiveChannelStore },
-      match: {
+      store: { alertReceiveChannelStore, msteamsChannelStore, hasFeature },
+      router: {
+        navigate,
         params: { id },
       },
-      history,
     } = this.props;
 
-    const promises = [];
+    const promises: Array<Promise<void | { [key: string]: { alerts_count: number; alert_groups_count: number } }>> = [];
+
+    const fetchItemAndLoadExtraData = async () => {
+      await alertReceiveChannelStore.fetchItemById(id);
+      await this.loadExtraData(id);
+    };
 
     if (!alertReceiveChannelStore.items[id]) {
-      promises.push(alertReceiveChannelStore.loadItem(id).then(() => this.loadExtraData(id)));
+      promises.push(fetchItemAndLoadExtraData());
     } else {
       promises.push(this.loadExtraData(id));
     }
 
     if (!alertReceiveChannelStore.channelFilterIds[id]) {
-      promises.push(alertReceiveChannelStore.updateChannelFilters(id));
+      promises.push(alertReceiveChannelStore.fetchChannelFilters(id));
     }
 
-    promises.push(alertReceiveChannelStore.updateTemplates(id));
-    promises.push(IntegrationHelper.fetchChatOps(store));
-    promises.push(alertReceiveChannelStore.updateCountersForIntegration(id));
+    promises.push(alertReceiveChannelStore.fetchTemplates(id));
+    if (hasFeature(AppFeature.MsTeams)) {
+      promises.push(msteamsChannelStore.updateMSTeamsChannels());
+    }
+    promises.push(alertReceiveChannelStore.fetchCountersForIntegration(id));
 
-    await Promise.all(promises)
-      .catch(() => {
-        if (!alertReceiveChannelStore.items[id]) {
-          // failed fetching the integration (most likely it's not existent)
-          history.push(`${PLUGIN_ROOT}/integrations`);
-        }
-      })
-      .finally(() => this.setState({ isLoading: false }));
+    try {
+      await Promise.all(promises);
+    } catch (_err) {
+      if (!alertReceiveChannelStore.items[id]) {
+        // failed fetching the integration (most likely it's not existent)
+        navigate(`${PLUGIN_ROOT}/integrations`);
+      }
+    } finally {
+      this.setState({ isLoading: false });
+    }
   }
 
-  async loadExtraData(id: AlertReceiveChannel['id']) {
+  async loadExtraData(id: ApiSchemas['AlertReceiveChannel']['id']) {
     const { alertReceiveChannelStore } = this.props.store;
 
     if (IntegrationHelper.isSpecificIntegration(alertReceiveChannelStore.items[id], 'grafana_alerting')) {
       // this will be delayed and not awaitable so that we don't delay the whole page load
-      return await alertReceiveChannelStore.updateConnectedContactPoints(id);
+      return await alertReceiveChannelStore.fetchConnectedContactPoints(id);
     }
 
     return Promise.resolve();
   }
 }
 
-interface IntegrationActionsProps {
-  isLegacyIntegration: boolean;
-  alertReceiveChannel: AlertReceiveChannel;
-  changeIsTemplateSettingsOpen: () => void;
-}
-
-const IntegrationActions: React.FC<IntegrationActionsProps> = ({
-  alertReceiveChannel,
-  isLegacyIntegration,
-  changeIsTemplateSettingsOpen,
-}) => {
-  const store = useStore();
-  const { alertReceiveChannelStore } = store;
-
-  const history = useHistory();
-
-  const [confirmModal, setConfirmModal] = useState<{
-    isOpen: boolean;
-    title: any;
-    dismissText: string;
-    confirmText: string;
-    body?: React.ReactNode;
-    description?: string;
-    confirmationText?: string;
-    onConfirm: () => void;
-  }>(undefined);
-
-  const [isIntegrationSettingsOpen, setIsIntegrationSettingsOpen] = useState(false);
-  const [labelsFormOpen, setLabelsFormOpen] = useState(false);
-  const [isHeartbeatFormOpen, setIsHeartbeatFormOpen] = useState(false);
-  const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
-  const [maintenanceData, setMaintenanceData] = useState<{
-    disabled: boolean;
-    alert_receive_channel_id: AlertReceiveChannel['id'];
-  }>(undefined);
-
-  const { id } = alertReceiveChannel;
-
-  return (
-    <>
-      {confirmModal && (
-        <ConfirmModal
-          isOpen={confirmModal.isOpen}
-          title={confirmModal.title}
-          confirmText={confirmModal.confirmText}
-          dismissText="Cancel"
-          body={confirmModal.body}
-          description={confirmModal.description}
-          confirmationText={confirmModal.confirmationText}
-          onConfirm={confirmModal.onConfirm}
-          onDismiss={() => setConfirmModal(undefined)}
-        />
-      )}
-
-      {alertReceiveChannel.demo_alert_enabled && (
-        <IntegrationSendDemoAlertModal
-          alertReceiveChannel={alertReceiveChannel}
-          isOpen={isDemoModalOpen}
-          onHideOrCancel={() => setIsDemoModalOpen(false)}
-        />
-      )}
-
-      {isIntegrationSettingsOpen && (
-        <IntegrationForm
-          isTableView={false}
-          onHide={() => setIsIntegrationSettingsOpen(false)}
-          onSubmit={() => alertReceiveChannelStore.updateItem(alertReceiveChannel['id'])}
-          id={alertReceiveChannel['id']}
-          navigateToAlertGroupLabels={(_id: AlertReceiveChannel['id']) => {
-            setIsIntegrationSettingsOpen(false);
-            setLabelsFormOpen(true);
-          }}
-        />
-      )}
-
-      {labelsFormOpen && (
-        <IntegrationLabelsForm
-          onHide={() => {
-            setLabelsFormOpen(false);
-          }}
-          onSubmit={() => alertReceiveChannelStore.updateItem(alertReceiveChannel['id'])}
-          id={alertReceiveChannel['id']}
-          onOpenIntegrationSettings={() => {
-            setIsIntegrationSettingsOpen(true);
-          }}
-        />
-      )}
-
-      {isHeartbeatFormOpen && (
-        <IntegrationHeartbeatForm
-          alertReceveChannelId={alertReceiveChannel['id']}
-          onClose={() => setIsHeartbeatFormOpen(false)}
-        />
-      )}
-
-      {maintenanceData && (
-        <MaintenanceForm
-          initialData={maintenanceData}
-          onUpdate={() => alertReceiveChannelStore.updateItem(alertReceiveChannel.id)}
-          onHide={() => setMaintenanceData(undefined)}
-        />
-      )}
-
-      <div className={cx('integration__actions')}>
-        <WithPermissionControlTooltip userAction={UserActions.IntegrationsTest}>
-          <Button
-            variant="secondary"
-            size="md"
-            onClick={() => setIsDemoModalOpen(true)}
-            data-testid="send-demo-alert"
-            disabled={!alertReceiveChannel.demo_alert_enabled}
-            tooltip={alertReceiveChannel.demo_alert_enabled ? '' : 'Demo Alerts are not enabled for this integration'}
-          >
-            Send demo alert
-          </Button>
-        </WithPermissionControlTooltip>
-
-        <div data-testid="integration-settings-context-menu-wrapper">
-          <WithContextMenu
-            renderMenuItems={() => (
-              <div className={cx('integration__actionsList')} id="integration-menu-options">
-                <div className={cx('integration__actionItem')} onClick={() => openIntegrationSettings()}>
-                  <Text type="primary">Integration Settings</Text>
-                </div>
-
-                {store.hasFeature(AppFeature.Labels) && (
-                  <WithPermissionControlTooltip userAction={UserActions.IntegrationsWrite}>
-                    <div className={cx('integration__actionItem')} onClick={() => openLabelsForm()}>
-                      <Text type="primary">Alert group labeling</Text>
-                    </div>
-                  </WithPermissionControlTooltip>
-                )}
-
-                {showHeartbeatSettings() && (
-                  <WithPermissionControlTooltip key="ok" userAction={UserActions.IntegrationsWrite}>
-                    <div
-                      className={cx('integration__actionItem')}
-                      onClick={() => setIsHeartbeatFormOpen(true)}
-                      data-testid="integration-heartbeat-settings"
-                    >
-                      Heartbeat Settings
-                    </div>
-                  </WithPermissionControlTooltip>
-                )}
-
-                {!alertReceiveChannel.maintenance_till && (
-                  <WithPermissionControlTooltip userAction={UserActions.MaintenanceWrite}>
-                    <div
-                      className={cx('integration__actionItem')}
-                      onClick={openStartMaintenance}
-                      data-testid="integration-start-maintenance"
-                    >
-                      <Text type="primary">Start Maintenance</Text>
-                    </div>
-                  </WithPermissionControlTooltip>
-                )}
-
-                <WithPermissionControlTooltip userAction={UserActions.MaintenanceWrite}>
-                  <div className={cx('integration__actionItem')} onClick={changeIsTemplateSettingsOpen}>
-                    <Text type="primary">Edit Templates</Text>
-                  </div>
-                </WithPermissionControlTooltip>
-
-                {alertReceiveChannel.maintenance_till && (
-                  <WithPermissionControlTooltip userAction={UserActions.MaintenanceWrite}>
-                    <div
-                      className={cx('integration__actionItem')}
-                      onClick={() => {
-                        setConfirmModal({
-                          isOpen: true,
-                          confirmText: 'Stop',
-                          dismissText: 'Cancel',
-                          onConfirm: onStopMaintenance,
-                          title: 'Stop Maintenance',
-                          body: (
-                            <Text type="primary">
-                              Are you sure you want to stop the maintenance for{' '}
-                              <Emoji text={alertReceiveChannel.verbal_name} /> ?
-                            </Text>
-                          ),
-                        });
-                      }}
-                      data-testid="integration-stop-maintenance"
-                    >
-                      <Text type="primary">Stop Maintenance</Text>
-                    </div>
-                  </WithPermissionControlTooltip>
-                )}
-
-                {isLegacyIntegration && (
-                  <WithPermissionControlTooltip userAction={UserActions.IntegrationsWrite}>
-                    <div
-                      className={cx('integration__actionItem')}
-                      onClick={() =>
-                        setConfirmModal({
-                          isOpen: true,
-                          title: 'Migrate Integration?',
-                          body: (
-                            <VerticalGroup spacing="lg">
-                              <Text type="primary">
-                                Are you sure you want to migrate <Emoji text={alertReceiveChannel.verbal_name} /> ?
-                              </Text>
-
-                              <VerticalGroup spacing="xs">
-                                <Text type="secondary">- Integration internal behaviour will be changed</Text>
-                                <Text type="secondary">
-                                  - Integration URL will stay the same, so no need to change {getMigrationDisplayName()}{' '}
-                                  configuration
-                                </Text>
-                                <Text type="secondary">
-                                  - Integration templates will be reset to suit the new payload
-                                </Text>
-                                <Text type="secondary">
-                                  - It is needed to adjust routes manually to the new payload
-                                </Text>
-                              </VerticalGroup>
-                            </VerticalGroup>
-                          ),
-                          onConfirm: onIntegrationMigrate,
-                          dismissText: 'Cancel',
-                          confirmText: 'Migrate',
-                        })
-                      }
-                    >
-                      Migrate
-                    </div>
-                  </WithPermissionControlTooltip>
-                )}
-
-                <CopyToClipboard
-                  text={alertReceiveChannel.id}
-                  onCopy={() => openNotification('Integration ID is copied')}
-                >
-                  <div className={cx('integration__actionItem')}>
-                    <HorizontalGroup spacing={'xs'}>
-                      <Icon name="copy" />
-
-                      <Text type="primary">UID: {alertReceiveChannel.id}</Text>
-                    </HorizontalGroup>
-                  </div>
-                </CopyToClipboard>
-                <RenderConditionally shouldRender={alertReceiveChannel.allow_delete}>
-                  <div className={cx('thin-line-break')} />
-                  <WithPermissionControlTooltip userAction={UserActions.IntegrationsWrite}>
-                    <div className={cx('integration__actionItem')}>
-                      <div
-                        onClick={() => {
-                          setConfirmModal({
-                            isOpen: true,
-                            title: 'Delete Integration?',
-                            body: (
-                              <Text type="primary">
-                                Are you sure you want to delete <Emoji text={alertReceiveChannel.verbal_name} /> ?
-                              </Text>
-                            ),
-                            onConfirm: deleteIntegration,
-                            dismissText: 'Cancel',
-                            confirmText: 'Delete',
-                          });
-                        }}
-                        className="u-width-100"
-                      >
-                        <Text type="danger">
-                          <HorizontalGroup spacing={'xs'}>
-                            <Icon name="trash-alt" />
-                            <span>Delete Integration</span>
-                          </HorizontalGroup>
-                        </Text>
-                      </div>
-                    </div>
-                  </WithPermissionControlTooltip>
-                </RenderConditionally>
-              </div>
-            )}
-          >
-            {({ openMenu }) => <HamburgerMenu openMenu={openMenu} listBorder={2} listWidth={200} withBackground />}
-          </WithContextMenu>
-        </div>
-      </div>
-    </>
-  );
-
-  function getMigrationDisplayName() {
-    const name = alertReceiveChannel.integration.toLowerCase().replace('legacy_', '');
-    switch (name) {
-      case 'grafana_alerting':
-        return 'Grafana Alerting';
-      case 'alertmanager':
-      default:
-        return 'AlertManager';
-    }
-  }
-
-  function onIntegrationMigrate() {
-    alertReceiveChannelStore
-      .migrateChannel(alertReceiveChannel.id)
-      .then(() => {
-        setConfirmModal(undefined);
-        openNotification('Integration has been successfully migrated.');
-      })
-      .then(() =>
-        Promise.all([
-          alertReceiveChannelStore.updateItem(alertReceiveChannel.id),
-          alertReceiveChannelStore.updateTemplates(alertReceiveChannel.id),
-        ])
-      )
-      .catch(() => openErrorNotification('An error has occurred. Please try again.'));
-  }
-
-  function showHeartbeatSettings() {
-    return alertReceiveChannel.is_available_for_integration_heartbeat;
-  }
-
-  function deleteIntegration() {
-    alertReceiveChannelStore
-      .deleteAlertReceiveChannel(alertReceiveChannel.id)
-      .then(() => history.push(`${PLUGIN_ROOT}/integrations`))
-      .then(() => openNotification('Integration has been succesfully deleted.'))
-      .catch(() => openErrorNotification('An error has occurred. Please try again.'));
-  }
-
-  function openIntegrationSettings() {
-    setIsIntegrationSettingsOpen(true);
-  }
-
-  function openLabelsForm() {
-    setLabelsFormOpen(true);
-  }
-
-  function openStartMaintenance() {
-    setMaintenanceData({ disabled: true, alert_receive_channel_id: alertReceiveChannel.id });
-  }
-
-  async function onStopMaintenance() {
-    setConfirmModal(undefined);
-
-    await alertReceiveChannelStore.stopMaintenanceMode(id);
-
-    openNotification('Maintenance has been stopped');
-    await alertReceiveChannelStore.updateItem(id);
-  }
-};
-
 interface IntegrationHeaderProps {
   alertReceiveChannelCounter: AlertReceiveChannelCounters;
-  alertReceiveChannel: AlertReceiveChannel;
+  alertReceiveChannel: ApiSchemas['AlertReceiveChannel'];
   integration: SelectOption;
   renderLabels: boolean;
 }
@@ -1104,11 +851,11 @@ const IntegrationHeader: React.FC<IntegrationHeaderProps> = ({
           addPadding
           text={alertReceiveChannel.labels.length}
           tooltipContent={
-            <VerticalGroup spacing="sm">
+            <Stack direction="column" gap={StackSize.sm}>
               {alertReceiveChannel.labels.map((label) => (
                 <LabelTag label={label.key.name} value={label.value.name} key={label.key.id} />
               ))}
-            </VerticalGroup>
+            </Stack>
           }
         />
       )}
@@ -1131,7 +878,7 @@ const IntegrationHeader: React.FC<IntegrationHeaderProps> = ({
 
       {alertReceiveChannel.maintenance_till && (
         <TooltipBadge
-          data-testid="maintenance-mode-remaining-time-tooltip"
+          testId="maintenance-mode-remaining-time-tooltip"
           borderType="primary"
           icon="pause"
           text={IntegrationHelper.getMaintenanceText(alertReceiveChannel.maintenance_till)}
@@ -1148,10 +895,7 @@ const IntegrationHeader: React.FC<IntegrationHeaderProps> = ({
       <div style={{ display: 'flex', flexDirection: 'row', gap: '16px', marginLeft: '8px' }}>
         <div className={cx('headerTop__item')}>
           <Text type="secondary">Type:</Text>
-          <HorizontalGroup spacing="xs">
-            <IntegrationLogo scale={0.08} integration={integration} />
-            <Text type="primary">{integration?.display_name}</Text>
-          </HorizontalGroup>
+          <IntegrationLogoWithTitle integration={integration} />
         </div>
         <div className={cx('headerTop__item')}>
           <Text type="secondary">Team:</Text>
@@ -1181,7 +925,7 @@ const IntegrationHeader: React.FC<IntegrationHeaderProps> = ({
     );
   }
 
-  function renderHeartbeat(alertReceiveChannel: AlertReceiveChannel) {
+  function renderHeartbeat(alertReceiveChannel: ApiSchemas['AlertReceiveChannel']) {
     const heartbeatId = alertReceiveChannelStore.alertReceiveChannelToHeartbeat[alertReceiveChannel.id];
     const heartbeat = heartbeatStore.items[heartbeatId];
 
@@ -1193,7 +937,6 @@ const IntegrationHeader: React.FC<IntegrationHeaderProps> = ({
 
     return (
       <TooltipBadge
-        data-testid="heartbeat-badge"
         text={undefined}
         className={cx('heartbeat-badge')}
         borderType={heartbeatStatus ? 'success' : 'danger'}
@@ -1205,4 +948,7 @@ const IntegrationHeader: React.FC<IntegrationHeaderProps> = ({
   }
 };
 
-export default withRouter(withMobXProviderContext(Integration));
+export const IntegrationPage = withRouter<
+  RouteProps,
+  Omit<IntegrationProps, 'store' | 'meta' | 'theme' | 'drawerConfig'>
+>(withMobXProviderContext(withDrawer<IntegrationDrawerKey>(_IntegrationPage)));

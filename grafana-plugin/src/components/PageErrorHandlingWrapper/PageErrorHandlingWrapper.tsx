@@ -1,15 +1,13 @@
-import React, { useEffect } from 'react';
+import React, { ReactElement, useEffect } from 'react';
 
-import { VerticalGroup } from '@grafana/ui';
-import cn from 'classnames/bind';
+import { css } from '@emotion/css';
+import { GrafanaTheme2 } from '@grafana/data';
+import { Stack, useStyles2 } from '@grafana/ui';
 
-import PluginLink from 'components/PluginLink/PluginLink';
-import Text from 'components/Text/Text';
-import { openWarningNotification } from 'utils';
-
-import styles from './PageErrorHandlingWrapper.module.css';
-
-const cx = cn.bind(styles);
+import { PluginLink } from 'components/PluginLink/PluginLink';
+import { Text } from 'components/Text/Text';
+import { StackSize } from 'utils/consts';
+import { openWarningNotification } from 'utils/utils';
 
 export interface PageBaseState {
   errorData: PageErrorData;
@@ -18,11 +16,12 @@ export interface PageBaseState {
 export interface PageErrorData {
   isNotFoundError?: boolean;
   isWrongTeamError?: boolean;
+  isUnknownError?: boolean;
   wrongTeamNoPermissions?: boolean;
   switchToTeam?: { name: string; id: string };
 }
 
-export default function PageErrorHandlingWrapper({
+export const PageErrorHandlingWrapper = function ({
   errorData,
   objectName,
   pageName,
@@ -34,7 +33,9 @@ export default function PageErrorHandlingWrapper({
   pageName: string;
   itemNotFoundMessage?: string;
   children: () => React.ReactNode;
-}): JSX.Element {
+}): ReactElement {
+  const styles = useStyles2(getStyles);
+
   useEffect(() => {
     if (!errorData) {
       return;
@@ -52,9 +53,9 @@ export default function PageErrorHandlingWrapper({
   const { wrongTeamNoPermissions } = errorData;
 
   return (
-    <div className={cx('not-found')}>
-      <VerticalGroup spacing="lg" align="center">
-        <Text.Title level={1} className={cx('error-code')}>
+    <div className={styles.notFound}>
+      <Stack direction="column" gap={StackSize.lg} alignItems="center">
+        <Text.Title level={1} className={styles.errorCode}>
           403
         </Text.Title>
         {wrongTeamNoPermissions && (
@@ -66,7 +67,27 @@ export default function PageErrorHandlingWrapper({
         <Text type="secondary">
           Or return to the <PluginLink query={{ page: pageName }}>{objectName} list</PluginLink>
         </Text>
-      </VerticalGroup>
+      </Stack>
     </div>
   );
-}
+};
+
+const getStyles = (theme: GrafanaTheme2) => {
+  return {
+    notFound: css`
+      margin: 50px auto;
+      text-align: center;
+      width: 400px;
+    `,
+
+    errorCode: css`
+      color: ${theme.colors.warning.text};
+    `,
+
+    changeTeamIcon: css`
+      color: white;
+      margin-right: 4px;
+      padding-top: 6px;
+    `,
+  };
+};

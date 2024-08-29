@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 
-import { HorizontalGroup, IconButton, Input } from '@grafana/ui';
-import cn from 'classnames/bind';
-import CopyToClipboard from 'react-copy-to-clipboard';
+import { cx } from '@emotion/css';
+import { IconButton, Input, Stack, useStyles2 } from '@grafana/ui';
 
-import { openNotification } from 'utils';
+import { CopyToClipboardIcon } from 'components/CopyToClipboardIcon/CopyToClipboardIcon';
+import { StackSize } from 'utils/consts';
 
-import styles from './IntegrationInputField.module.scss';
+import { getIntegrationInputFieldStyles } from './IntegrationInputField.styles';
 
 interface IntegrationInputFieldProps {
   value: string;
@@ -15,53 +15,55 @@ interface IntegrationInputFieldProps {
   showCopy?: boolean;
   showExternal?: boolean;
   className?: string;
+  inputClassName?: string;
+  iconsClassName?: string;
+  placeholder?: string;
 }
 
-const cx = cn.bind(styles);
-
-const IntegrationInputField: React.FC<IntegrationInputFieldProps> = ({
-  isMasked = true,
+export const IntegrationInputField: React.FC<IntegrationInputFieldProps> = ({
+  isMasked = false,
   value,
   showEye = true,
   showCopy = true,
   showExternal = true,
   className,
+  placeholder = '',
+  inputClassName = '',
+  iconsClassName = '',
 }) => {
+  const styles = useStyles2(getIntegrationInputFieldStyles);
   const [isInputMasked, setIsMasked] = useState(isMasked);
 
   return (
-    <div className={cx('root', { [className]: !!className })}>
-      <div className={cx('input-container')}>{renderInputField()}</div>
+    <div className={cx(styles.root, { [className]: !!className })}>
+      <div className={styles.inputContainer}>{renderInputField()}</div>
 
-      <div className={cx('icons')}>
-        <HorizontalGroup spacing={'xs'}>
+      <div className={cx(styles.icons, iconsClassName)}>
+        <Stack gap={StackSize.xs}>
           {showEye && <IconButton aria-label="Reveal" name={'eye'} size={'xs'} onClick={onInputReveal} />}
-          {showCopy && (
-            <CopyToClipboard text={value} onCopy={onCopy}>
-              <IconButton aria-label="Copy" name={'copy'} size={'xs'} />
-            </CopyToClipboard>
-          )}
+          {showCopy && <CopyToClipboardIcon text={value} iconButtonProps={{ size: 'xs' }} />}
           {showExternal && <IconButton aria-label="Open" name={'external-link-alt'} size={'xs'} onClick={onOpen} />}
-        </HorizontalGroup>
+        </Stack>
       </div>
     </div>
   );
 
   function renderInputField() {
-    return <Input className={cx('input')} value={isInputMasked ? value?.replace(/./g, '*') : value} disabled />;
+    return (
+      <Input
+        className={cx(inputClassName)}
+        value={isInputMasked ? value?.replace(/./g, '*') : value}
+        placeholder={placeholder}
+        disabled
+      />
+    );
   }
 
   function onInputReveal() {
     setIsMasked(!isInputMasked);
   }
 
-  function onCopy() {
-    openNotification("Integration's HTTP Endpoint is copied");
-  }
-
   function onOpen() {
     window.open(value, '_blank');
   }
 };
-
-export default IntegrationInputField;

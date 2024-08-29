@@ -3,10 +3,10 @@ from collections import defaultdict
 from rest_framework import fields, serializers
 from rest_framework.validators import UniqueTogetherValidator
 
-from apps.alerts.models import AlertReceiveChannel
 from apps.webhooks.models import Webhook, WebhookResponse
 from apps.webhooks.models.webhook import PUBLIC_WEBHOOK_HTTP_METHODS, WEBHOOK_FIELD_PLACEHOLDER
-from common.api_helpers.custom_fields import TeamPrimaryKeyRelatedField
+from apps.webhooks.presets.preset_options import WebhookPresetOptions
+from common.api_helpers.custom_fields import IntegrationFilteredByOrganizationField, TeamPrimaryKeyRelatedField
 from common.api_helpers.exceptions import BadRequest
 from common.api_helpers.utils import CurrentOrganizationDefault, CurrentTeamDefault, CurrentUserDefault
 from common.jinja_templater import apply_jinja_template
@@ -54,6 +54,9 @@ class WebhookCreateSerializer(serializers.ModelSerializer):
     team = TeamPrimaryKeyRelatedField(allow_null=True, default=CurrentTeamDefault())
     user = serializers.HiddenField(default=CurrentUserDefault())
     trigger_type = WebhookTriggerTypeField()
+    integration_filter = IntegrationFilteredByOrganizationField(
+        source="filtered_integrations", many=True, required=False
+    )
 
     class Meta:
         model = Webhook
@@ -88,7 +91,6 @@ class WebhookCreateSerializer(serializers.ModelSerializer):
             "headers": {"required": False, "allow_null": True, "allow_blank": True},
             "data": {"required": False, "allow_null": True, "allow_blank": True},
             "forward_all": {"required": False, "allow_null": False},
-            "integration_filter": {"required": False, "allow_null": True},
         }
 
         validators = [UniqueTogetherValidator(queryset=Webhook.objects.all(), fields=["name", "organization"])]
@@ -99,6 +101,8 @@ class WebhookCreateSerializer(serializers.ModelSerializer):
             result["password"] = WEBHOOK_FIELD_PLACEHOLDER
         if instance.authorization_header:
             result["authorization_header"] = WEBHOOK_FIELD_PLACEHOLDER
+        if instance.filtered_integrations.count() == 0:
+            result["integration_filter"] = None
         return result
 
     def to_internal_value(self, data):
@@ -107,6 +111,8 @@ class WebhookCreateSerializer(serializers.ModelSerializer):
             data["password"] = webhook.password
         if data.get("authorization_header") == WEBHOOK_FIELD_PLACEHOLDER:
             data["authorization_header"] = webhook.authorization_header
+        if not data.get("integration_filter"):
+            data["integration_filter"] = []
         return super().to_internal_value(data)
 
     def _validate_template_field(self, template):
@@ -149,22 +155,17 @@ class WebhookCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(f"Must be one of {PUBLIC_WEBHOOK_HTTP_METHODS}")
         return http_method
 
-    def validate_integration_filter(self, integration_filter):
-        if integration_filter:
-            if type(integration_filter) is not list:
-                raise serializers.ValidationError(INTEGRATION_FILTER_MESSAGE)
-            integrations = AlertReceiveChannel.objects.filter(
-                organization=self.context["request"].auth.organization, public_primary_key__in=integration_filter
-            )
-            if len(integrations) != len(integration_filter):
-                raise serializers.ValidationError(INTEGRATION_FILTER_MESSAGE)
-        return integration_filter
-
     def validate_preset(self, preset):
         raise serializers.ValidationError(PRESET_VALIDATION_MESSAGE)
 
     def validate(self, data):
-        if self.instance and self.instance.preset:
+        if (
+            self.instance
+            and self.instance.preset
+            and WebhookPresetOptions.ADVANCED_PRESET_META_DATA
+            and WebhookPresetOptions.ADVANCED_PRESET_META_DATA.id
+            and self.instance.preset != WebhookPresetOptions.ADVANCED_PRESET_META_DATA.id
+        ):
             raise serializers.ValidationError(PRESET_VALIDATION_MESSAGE)
         return data
 
@@ -185,5 +186,4 @@ class WebhookUpdateSerializer(WebhookCreateSerializer):
             "data": {"required": False, "allow_null": True, "allow_blank": True},
             "forward_all": {"required": False, "allow_null": False},
             "http_method": {"required": False, "allow_null": False, "allow_blank": False},
-            "integration_filter": {"required": False, "allow_null": True},
         }
